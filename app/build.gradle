@@ -13,9 +13,6 @@ configurations.all {
     exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
 }
 
-// Release signing comes from a local, untracked keystore.properties file so
-// the keystore path/passwords never end up in git. See README "Releasing"
-// for how to generate the keystore and this file.
 def keystorePropsFile = rootProject.file('keystore.properties')
 def keystoreProps = new Properties()
 def hasReleaseSigning = keystorePropsFile.exists()
