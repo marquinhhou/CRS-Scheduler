@@ -22,14 +22,12 @@ SOFTWARE.
 
 ---
 
-Credits: Marc Lawrence Dizon, BS Statistics -- original concept and web prototype
+Credits: Marc Dizon, BS Statistics -- original concept and web prototype
 (nothing_schedule.html) that this Android app is ported and extended from.
 
 This is an independent, unofficial student project. It is not affiliated
 with, endorsed by, or connected to the University of the Philippines Diliman,
-the UP School of Statistics, the UP Computerized Registration System (CRS), or 
-Nothing Technology Limited. "Nothing OS" is referenced solely to describe the 
-application's design inspiration.
+the UP School of Statistics, or the UP Computerized Registration System (CRS).
 
 Bundled fonts (see app/src/main/res/font/) are distributed under the SIL Open
 Font License 1.1 (DotGothic16, Apache 2.0-compatible per Google Fonts) and the

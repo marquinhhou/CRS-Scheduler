@@ -4,15 +4,16 @@ import android.app.PendingIntent;
 import android.appwidget.AppWidgetManager;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.util.TypedValue;
 import android.view.View;
 import android.widget.RemoteViews;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
@@ -24,58 +25,104 @@ import dev.marquinhhou.crsscheduler.data.ScheduleStore;
 import dev.marquinhhou.crsscheduler.data.SettingsStore;
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 import dev.marquinhhou.crsscheduler.ui.ConfigureActivity;
+import dev.marquinhhou.crsscheduler.ui.Theming;
 import dev.marquinhhou.crsscheduler.ui.WeekScheduleActivity;
 import dev.marquinhhou.crsscheduler.ui.WidgetActionActivity;
+import dev.marquinhhou.crsscheduler.ui.WidgetForm5PromptActivity;
+import dev.marquinhhou.crsscheduler.ui.WidgetSaveActivity;
 
 /**
- * Builds the RemoteViews for both widgets. Rows are plain children added via
- * addView() (not a RemoteViewsFactory-backed collection), so each one just gets
- * its own direct PendingIntent -- no shared PendingIntentTemplate/fill-in-intent
- * dance is needed, which also sidesteps StackView's "no nested scrolling, patchy
- * launcher support" issues entirely.
+ * Builds the RemoteViews for both widgets. Rows use addView() with their own direct
+ * PendingIntent, except the Today class list, which is a real ListView backed by
+ * TodayClassesRemoteViewsService (RemoteViews has no plain scroll container).
  *
- * The clock is a plain android.widget.TextClock in each layout's XML rather than
- * something we push text into -- TextClock (like AnalogClock) is one of the view
- * types RemoteViews explicitly supports specifically because it knows how to keep
- * itself ticking once hosted in the launcher's process, with no alarms, wake-ups,
- * or per-minute rebuilds required from this app at all.
- *
- * SIZING: home screen widgets can be freely resized by the user, but the
- * reserved grid footprint that resize produces is controlled entirely by the
- * launcher (its own grid snapping) -- this app can never shrink that footprint
- * back down after the fact, only render less/more content within whatever it's
- * given. The Today widget's class list is a genuinely scrollable ListView (see
- * TodayClassesRemoteViewsService) backed by an AT_MOST-constrained parent, so it
- * naturally shows as many rows as fit and lets the rest be scrolled to -- no
- * manual row-counting needed there. The Week widget's grid still uses the
- * addView()-built static-row approach (a 2D table doesn't map onto a 1D
- * ListView as cleanly, since the day-letter header needs to stay pinned while
- * only the data rows scroll), so it estimates how many rows fit from the
- * content about to be rendered and truncates with a "+N more" row rather than
- * clipping silently. The callers (the AppWidgetProviders + WidgetRefreshScheduler)
- * re-fetch options for every widget id every time they rebuild it, since each
- * placed instance can be resized independently.
+ * Every layout/drawable/color exists as three variants (_ge/_ne/_adaptive);
+ * resolveThemeAssets() picks the active set once per build call.
  */
 public final class WidgetRenderer {
 
     public static final String[] DAY_LABELS = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
     public static final int[] WEEK_ORDER = {1, 2, 3, 4, 5, 6, 0}; // Mon..Sun
 
-    private static final int RED = Color.parseColor("#FF2E17");
-    private static final int INK = Color.parseColor("#F3F2ED");
-    private static final int INK_DIM = Color.parseColor("#8B8B86");
-    private static final int BG = Color.parseColor("#000000");
+    // Resolved once per build call by resolveThemeAssets() -- see class comment.
+    private static int accent, ink, inkDim, bg, lineStrong;
+    private static boolean useDotRing;
+    private static int layoutToday, layoutTodayCompact, layoutWeek, layoutWeekExpanded;
+    private static int layoutRowClass, layoutRowWeekDot, layoutRowWeekTable;
+    private static int layoutCellTime, layoutCellDayLabel, layoutCellClass, layoutRowMoreIndicator;
+    private static int drawableCardBg, drawableCardBgNow, drawableChipFilledBg, drawableChipOutlineBg;
+    private static int drawableRowBg, drawableRowBgNow, drawableDotAccent, drawableDotDim, drawableDotHasClass;
 
-    private static final int TODAY_BASE_HEIGHT_DP = 190;  // padding + header + hero card + list title
-    private static final int TODAY_ROW_HEIGHT_DP = 56;    // one row_class row, incl. its own bottom padding gap
-    private static final int WEEK_BASE_HEIGHT_DP = 132;   // padding + header + headline + table padding + day-letter row + no-class-days note
-    private static final int WEEK_ROW_HEIGHT_DP = 19;      // one grid data row
+    private static final int TODAY_BASE_HEIGHT_DP = 190;
+
+    // Launcher-reported height is a rounded estimate, not exact -- pixel-matching row count
+    // to it caused rows to get cropped/faded even with real room. Now the list only needs
+    // space for its header; native ListView scrolling handles the rest. Slack below covers
+    // boundary-adjacent sizes; only too-small-for-the-header falls back to compact.
+    private static final int SIZE_ESTIMATE_SLACK_DP = 16;
+    private static final int WEEK_BASE_HEIGHT_DP = 132;
+    private static final int WEEK_ROW_HEIGHT_DP = 19;
+
+    // Extra vertical room the compact view's day-dots row needs on top of WEEK_BASE_HEIGHT_DP
+    // (header + summary card). At the smallest widget grid sizes there isn't room for it --
+    // rather than let it render half-clipped by the OS, buildWeekCompact() skips it entirely.
+    //
+    // Unlike SIZE_ESTIMATE_SLACK_DP above (which leans toward showing content, since a cropped
+    // list row is still readable), this case leans the other way: a day dot clipped down to a
+    // couple of dp doesn't fade gracefully, it flattens into what reads as a stray dash. So on
+    // top of the row's own footprint, WEEK_DOTS_ROW_MARGIN_DP pads the requirement further to
+    // absorb the same launcher-rounding slop, erring toward hiding the row over showing it broken.
+    private static final int WEEK_DOTS_ROW_HEIGHT_DP = 24;
+    private static final int WEEK_DOTS_ROW_MARGIN_DP = 16;
+
+    // No more "+N more" truncation -- the table always shows every occupied slot and
+    // shrinks to fit, down to this floor, below which it falls back to buildWeekCompact().
+    private static final float WEEK_MIN_ROW_SCALE = 0.8f;
+    private static final int WEEK_MIN_ROW_HEIGHT_DP = Math.round(WEEK_ROW_HEIGHT_DP * WEEK_MIN_ROW_SCALE);
 
     private WidgetRenderer() {}
+
+    private static void resolveThemeAssets(Context context) {
+        accent = Theming.color(context, R.color.ge_accent, R.color.ne_accent, R.color.adaptive_accent);
+        ink = Theming.color(context, R.color.ge_ink, R.color.ne_ink, R.color.adaptive_ink);
+        inkDim = Theming.color(context, R.color.ge_ink_dim, R.color.ne_ink_dim, R.color.adaptive_ink_dim);
+        bg = Theming.color(context, R.color.ge_bg, R.color.ne_bg, R.color.adaptive_bg);
+        lineStrong = Theming.color(context, R.color.ge_line_strong, R.color.ne_line_strong, R.color.adaptive_line_strong);
+        useDotRing = Theming.usesDotRing(context);
+
+        layoutToday = Theming.pick(context, R.layout.today_widget_ge, R.layout.today_widget_ne, R.layout.today_widget_adaptive);
+        layoutTodayCompact = Theming.pick(context, R.layout.today_widget_compact_ge, R.layout.today_widget_compact_ne, R.layout.today_widget_compact_adaptive);
+        layoutWeek = Theming.pick(context, R.layout.week_widget_ge, R.layout.week_widget_ne, R.layout.week_widget_adaptive);
+        layoutWeekExpanded = Theming.pick(context, R.layout.week_widget_expanded_ge, R.layout.week_widget_expanded_ne, R.layout.week_widget_expanded_adaptive);
+        layoutRowClass = Theming.pick(context, R.layout.row_class_ge, R.layout.row_class_ne, R.layout.row_class_adaptive);
+        layoutRowWeekDot = Theming.pick(context, R.layout.row_week_dot_ge, R.layout.row_week_dot_ne, R.layout.row_week_dot_adaptive);
+        layoutRowWeekTable = Theming.pick(context, R.layout.row_week_table_ge, R.layout.row_week_table_ne, R.layout.row_week_table_adaptive);
+        layoutCellTime = Theming.pick(context, R.layout.cell_week_table_time_ge, R.layout.cell_week_table_time_ne, R.layout.cell_week_table_time_adaptive);
+        layoutCellDayLabel = Theming.pick(context, R.layout.cell_week_table_daylabel_ge, R.layout.cell_week_table_daylabel_ne, R.layout.cell_week_table_daylabel_adaptive);
+        layoutCellClass = Theming.pick(context, R.layout.cell_week_table_class_ge, R.layout.cell_week_table_class_ne, R.layout.cell_week_table_class_adaptive);
+        layoutRowMoreIndicator = Theming.pick(context, R.layout.row_more_indicator_ge, R.layout.row_more_indicator_ne, R.layout.row_more_indicator_adaptive);
+
+        drawableCardBg = Theming.pick(context, R.drawable.card_bg_ge, R.drawable.card_bg_ne, R.drawable.card_bg_adaptive);
+        drawableCardBgNow = Theming.pick(context, R.drawable.card_bg_now_ge, R.drawable.card_bg_now_ne, R.drawable.card_bg_now_adaptive);
+        drawableChipFilledBg = Theming.pick(context, R.drawable.chip_filled_bg_ge, R.drawable.chip_filled_bg_ne, R.drawable.chip_filled_bg_adaptive);
+        drawableChipOutlineBg = Theming.pick(context, R.drawable.chip_outline_bg_ge, R.drawable.chip_outline_bg_ne, R.drawable.chip_outline_bg_adaptive);
+        drawableRowBg = Theming.pick(context, R.drawable.row_bg_ge, R.drawable.row_bg_ne, R.drawable.row_bg_adaptive);
+        drawableRowBgNow = Theming.pick(context, R.drawable.row_bg_now_ge, R.drawable.row_bg_now_ne, R.drawable.row_bg_now_adaptive);
+        drawableDotAccent = Theming.pick(context, R.drawable.dot_accent_ge, R.drawable.dot_accent_ne, R.drawable.dot_accent_adaptive);
+        drawableDotDim = Theming.pick(context, R.drawable.dot_dim_ge, R.drawable.dot_dim_ne, R.drawable.dot_dim_adaptive);
+        drawableDotHasClass = Theming.pick(context, R.drawable.dot_has_class_ge, R.drawable.dot_has_class_ne, R.drawable.dot_has_class_adaptive);
+    }
+
+    /** So TodayClassesRemoteViewsService's out-of-bounds fallback row picks the right theme too. */
+    public static int rowMoreIndicatorLayout(Context context) {
+        resolveThemeAssets(context);
+        return layoutRowMoreIndicator;
+    }
 
     // Today widget
 
     public static RemoteViews buildToday(Context context, Bundle options, int appWidgetId) {
+        resolveThemeAssets(context);
         List<ClassSession> schedule = ScheduleStore.load(context);
         SettingsStore.SemesterPhase rawPhase = SettingsStore.currentSemesterPhase(context);
         SettingsStore.SemesterPhase phase = SettingsStore.effectiveDisplayPhase(context);
@@ -87,24 +134,28 @@ public final class WidgetRenderer {
         }
 
         int availableDp = currentPortraitHeightDp(options);
-        boolean roomForList = availableDp == Integer.MAX_VALUE || availableDp >= TODAY_BASE_HEIGHT_DP;
+        boolean roomForList = availableDp == Integer.MAX_VALUE
+                || availableDp + SIZE_ESTIMATE_SLACK_DP >= TODAY_BASE_HEIGHT_DP;
 
         return roomForList
-                ? buildTodayFull(context, schedule, todays, appWidgetId, availableDp, phase, rawPhase)
+                ? buildTodayFull(context, schedule, todays, appWidgetId, phase, rawPhase)
                 : buildTodayCompact(context, schedule, todays, phase, rawPhase);
     }
 
     private static RemoteViews buildTodayFull(Context context, List<ClassSession> schedule,
-                                               List<ClassSession> todays, int appWidgetId, int availableDp,
+                                               List<ClassSession> todays, int appWidgetId,
                                                SettingsStore.SemesterPhase phase, SettingsStore.SemesterPhase rawPhase) {
-        RemoteViews rv = new RemoteViews(context.getPackageName(), R.layout.today_widget);
+        RemoteViews rv = new RemoteViews(context.getPackageName(), layoutToday);
         bindGear(context, rv);
         bindViewFullSchedule(context, rv);
+        bindSaveButton(context, rv);
+        bindForm5Button(context, rv);
         bindHeaderBrandLabel(context, rv, TodayWidgetProvider.class,
                 TodayWidgetProvider.ACTION_TOGGLE_PREVIEW, "TODAY", rawPhase, 5);
 
         Calendar now = Calendar.getInstance();
         int nowMin = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE);
+        int today = calendarDayToJs(now.get(Calendar.DAY_OF_WEEK));
 
         ClassSession ongoing = null;
         for (ClassSession c : todays) {
@@ -119,46 +170,89 @@ public final class WidgetRenderer {
         if (ongoing != null) {
             float progress = (nowMin - ongoing.start) / (float) (ongoing.end - ongoing.start);
             showHero(rv, "NOW", ongoing, progress, ongoing.end, "%s left", true, true);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, todayMinuteToEpochMillis(ongoing.end));
         } else if (next != null) {
+            // A class already finished earlier today (as opposed to this being before the
+            // day's first class) -- call this out as free time rather than just "next", so
+            // the hero card doesn't read like a class is about to start out of nowhere.
+            boolean hadEarlierClassToday = false;
+            for (ClassSession c : todays) if (c.end <= nowMin) { hadEarlierClassToday = true; break; }
+            String label = hadEarlierClassToday ? "FREE TIME" : "NEXT";
             int gapWindow = 240;
             float progress = 1f - Math.min(1f, (next.start - nowMin) / (float) gapWindow);
-            showHero(rv, "NEXT", next, progress, next.start, "in %s", false, true);
+            showHero(rv, label, next, progress, next.start, "in %s", false, true);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, todayMinuteToEpochMillis(next.start));
         } else if (phase == SettingsStore.SemesterPhase.UPCOMING) {
-            // Only reached when NOT already previewing (previewing folds phase
-            // to ACTIVE upstream) -- so this is always the "off" state, safe
-            // to offer turning preview on here.
+            LocalDate start = SettingsStore.getSemesterStart(context);
             showEmptyHero(rv, "Semester hasn't started yet.",
-                    "Classes begin " + formatSemesterDate(SettingsStore.getSemesterStart(context)) + ". Tap to preview anyway.", true);
+                    "Classes begin " + formatSemesterDate(start) + daysSuffix(daysUntil(start)) + ". Tap to preview anyway.", true);
             bindToggleTap(context, rv, R.id.hero_empty_sub, TodayWidgetProvider.class,
                     TodayWidgetProvider.ACTION_TOGGLE_PREVIEW, 6);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, null);
         } else if (phase == SettingsStore.SemesterPhase.ENDED) {
+            LocalDate end = SettingsStore.getSemesterEnd(context);
             showEmptyHero(rv, "Semester has ended.",
-                    "Classes ran through " + formatSemesterDate(SettingsStore.getSemesterEnd(context)) + ".", true);
+                    "Classes ran through " + formatSemesterDate(end) + ".", true);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, null);
         } else if (!schedule.isEmpty()) {
             showEmptyHero(rv, "Day's clear from here.", "Nothing left on today's schedule.", true);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, null);
         } else {
             showEmptyHero(rv, "No schedule loaded.", "Tap the gear to load your CRS classes.", true);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, null);
         }
 
         boolean showTomorrow = SettingsStore.isShowTomorrowEnabled(context);
         rv.setTextViewText(R.id.today_list_title,
                 (!outOfSession && !schedule.isEmpty())
                         ? (showTomorrow ? "TOMORROW'S CLASSES" : "TODAY'S CLASSES") : "");
-        rv.setTextViewText(R.id.today_list_empty, showTomorrow ? "No classes tomorrow." : "No classes today.");
+        rv.setTextViewText(R.id.today_list_empty, todayListEmptyText(schedule, today, showTomorrow, outOfSession));
         bindTomorrowToggle(context, rv, showTomorrow);
 
-        bindTodayListAdapter(context, rv, appWidgetId, availableDp);
+        bindTodayListAdapter(context, rv, appWidgetId);
 
         return rv;
+    }
+
+    /**
+     * "No classes today."/"No classes tomorrow." -- or, when the schedule has other days with
+     * classes, appends how many days from today the next one actually falls on (e.g. Friday's
+     * empty weekend preview reads "No classes tomorrow, next class in 3").
+     */
+    private static String todayListEmptyText(List<ClassSession> schedule, int today, boolean showTomorrow, boolean outOfSession) {
+        String base = showTomorrow ? "No classes tomorrow" : "No classes today";
+        if (outOfSession || schedule.isEmpty()) return base + ".";
+
+        int targetDay = showTomorrow ? (today + 1) % 7 : today;
+        boolean targetDayHasClasses = false;
+        for (ClassSession c : schedule) if (c.days.contains(targetDay)) { targetDayHasClasses = true; break; }
+        if (targetDayHasClasses) return base + ".";
+
+        int daysAfterTarget = daysUntilNextClass(schedule, targetDay);
+        if (daysAfterTarget <= 0) return base + ".";
+
+        int daysFromToday = (showTomorrow ? 1 : 0) + daysAfterTarget;
+        return base + ", next class in " + daysFromToday + (daysFromToday == 1 ? " day" : " days");
+    }
+
+    /** First offset (1..7) after {@code fromDayIdx} (exclusive) whose weekday has a class, or -1 if none all week. */
+    private static int daysUntilNextClass(List<ClassSession> schedule, int fromDayIdx) {
+        for (int offset = 1; offset <= 7; offset++) {
+            int dayIdx = (fromDayIdx + offset) % 7;
+            for (ClassSession c : schedule) if (c.days.contains(dayIdx)) return offset;
+        }
+        return -1;
     }
 
     /** Header + hero card only -- used when there's no room for even a single class row. */
     private static RemoteViews buildTodayCompact(Context context, List<ClassSession> schedule,
                                                   List<ClassSession> todays, SettingsStore.SemesterPhase phase,
                                                   SettingsStore.SemesterPhase rawPhase) {
-        RemoteViews rv = new RemoteViews(context.getPackageName(), R.layout.today_widget_compact);
+        RemoteViews rv = new RemoteViews(context.getPackageName(), layoutTodayCompact);
         bindGear(context, rv);
         bindViewFullSchedule(context, rv);
+        bindSaveButton(context, rv);
+        bindForm5Button(context, rv);
         bindHeaderBrandLabel(context, rv, TodayWidgetProvider.class,
                 TodayWidgetProvider.ACTION_TOGGLE_PREVIEW, "TODAY", rawPhase, 5);
 
@@ -177,37 +271,43 @@ public final class WidgetRenderer {
         if (ongoing != null) {
             float progress = (nowMin - ongoing.start) / (float) (ongoing.end - ongoing.start);
             showHero(rv, "NOW", ongoing, progress, 0, "", true, false);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, todayMinuteToEpochMillis(ongoing.end));
         } else if (next != null) {
+            boolean hadEarlierClassToday = false;
+            for (ClassSession c : todays) if (c.end <= nowMin) { hadEarlierClassToday = true; break; }
+            String label = hadEarlierClassToday ? "FREE TIME" : "NEXT";
             int gapWindow = 240;
             float progress = 1f - Math.min(1f, (next.start - nowMin) / (float) gapWindow);
-            showHero(rv, "NEXT", next, progress, 0, "", false, false);
+            showHero(rv, label, next, progress, 0, "", false, false);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, todayMinuteToEpochMillis(next.start));
         } else if (phase == SettingsStore.SemesterPhase.UPCOMING) {
-            showEmptyHero(rv, "Semester hasn't started yet.", "", false);
+            long days = daysUntil(SettingsStore.getSemesterStart(context));
+            showEmptyHero(rv, days > 0 ? "Semester in " + days + (days == 1 ? " day" : " days")
+                    : "Semester hasn't started yet.", "", false);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, null);
         } else if (phase == SettingsStore.SemesterPhase.ENDED) {
             showEmptyHero(rv, "Semester has ended.", "", false);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, null);
         } else if (!schedule.isEmpty()) {
             showEmptyHero(rv, "Day's clear from here.", "", false);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, null);
         } else {
             showEmptyHero(rv, "No schedule loaded.", "", false);
+            WidgetRefreshScheduler.scheduleNextTransitionTick(context, null);
         }
 
         return rv;
     }
 
-    /**
-     * countdownTargetMinute/countdownFormat are only used when includeCountdown is true.
-     * The countdown is a Chronometer, not a static string: it counts down to the real
-     * wall-clock target (class end for "NOW", class start for "NEXT") and keeps ticking
-     * every second in the launcher process itself, so it's never stale even if the
-     * widget's own RemoteViews haven't been rebuilt in a while -- see the class-level
-     * comment on staleness for why that matters.
-     */
     private static void showHero(RemoteViews rv, String label, ClassSession c, float progress,
                                   int countdownTargetMinute, String countdownFormat,
                                   boolean isNow, boolean includeCountdown) {
         rv.setViewVisibility(R.id.hero_content, View.VISIBLE);
         rv.setViewVisibility(R.id.hero_empty, View.GONE);
-        rv.setImageViewBitmap(R.id.hero_ring, RingBitmapFactory.build(progress, 180, RED));
+        android.graphics.Bitmap ring = useDotRing
+                ? RingBitmapFactory.buildDotRing(progress, 180, accent)
+                : RingBitmapFactory.buildArcRing(progress, 180, accent, lineStrong);
+        rv.setImageViewBitmap(R.id.hero_ring, ring);
         rv.setTextViewText(R.id.hero_label, label);
         rv.setTextViewText(R.id.hero_class, c.name);
         rv.setTextViewText(R.id.hero_meta, c.displayRoom() + " \u00B7 " + minToLabel(c.start) + "\u2013" + minToLabel(c.end));
@@ -217,10 +317,9 @@ public final class WidgetRenderer {
             rv.setChronometer(R.id.hero_countdown, base, countdownFormat, true);
             rv.setChronometerCountDown(R.id.hero_countdown, true);
         }
-        rv.setInt(R.id.hero_card, "setBackgroundResource", isNow ? R.drawable.card_bg_now : R.drawable.card_bg);
+        rv.setInt(R.id.hero_card, "setBackgroundResource", isNow ? drawableCardBgNow : drawableCardBg);
     }
 
-    /** Epoch millis for today's date at the given minute-of-day, for seeding a countdown Chronometer. */
     private static long todayMinuteToEpochMillis(int minuteOfDay) {
         Calendar cal = Calendar.getInstance();
         cal.set(Calendar.HOUR_OF_DAY, minuteOfDay / 60);
@@ -235,17 +334,18 @@ public final class WidgetRenderer {
         rv.setViewVisibility(R.id.hero_empty, View.VISIBLE);
         rv.setTextViewText(R.id.hero_empty_title, title);
         if (includeSub) rv.setTextViewText(R.id.hero_empty_sub, sub);
-        rv.setInt(R.id.hero_card, "setBackgroundResource", R.drawable.card_bg);
+        rv.setInt(R.id.hero_card, "setBackgroundResource", drawableCardBg);
     }
 
     // Week widget
 
     public static RemoteViews buildWeekSummary(Context context, Bundle options) {
+        resolveThemeAssets(context);
         List<ClassSession> schedule = ScheduleStore.load(context);
         SettingsStore.SemesterPhase rawPhase = SettingsStore.currentSemesterPhase(context);
         SettingsStore.SemesterPhase phase = SettingsStore.effectiveDisplayPhase(context);
         if (phase == SettingsStore.SemesterPhase.UPCOMING || phase == SettingsStore.SemesterPhase.ENDED) {
-            return buildWeekCompact(context, schedule, phase, rawPhase);
+            return buildWeekCompact(context, schedule, phase, rawPhase, options);
         }
 
         List<Integer> breakpoints = schedule.isEmpty() ? new ArrayList<>() : weekBreakpoints(schedule);
@@ -254,24 +354,42 @@ public final class WidgetRenderer {
                 ? new ArrayList<>() : occupiedRowIndices(schedule, breakpoints, activeDays);
         int totalGridRows = occupiedRows.size();
 
-        int availableDp = currentPortraitHeightDp(options);
-        int maxRowsThatFit = (availableDp == Integer.MAX_VALUE)
-                ? totalGridRows
-                : Math.max(0, (availableDp - WEEK_BASE_HEIGHT_DP) / WEEK_ROW_HEIGHT_DP);
-
-        if (schedule.isEmpty() || maxRowsThatFit <= 0) {
-            return buildWeekCompact(context, schedule, phase, rawPhase);
+        if (schedule.isEmpty() || totalGridRows == 0) {
+            return buildWeekCompact(context, schedule, phase, rawPhase, options);
         }
-        int rowsToShow = Math.min(totalGridRows, maxRowsThatFit);
-        return buildWeekExpanded(context, schedule, breakpoints, activeDays, occupiedRows, rowsToShow, rawPhase);
+
+        int availableDp = currentPortraitHeightDp(options);
+        if (availableDp != Integer.MAX_VALUE) {
+            int availableForRows = availableDp - WEEK_BASE_HEIGHT_DP;
+            if (availableForRows < totalGridRows * WEEK_MIN_ROW_HEIGHT_DP) {
+                // Even the smallest legible row size can't fit every time slot -- rather than
+                // clip or fade rows, fall back to the compact summary view.
+                return buildWeekCompact(context, schedule, phase, rawPhase, options);
+            }
+        }
+
+        float scale = computeWeekRowScale(totalGridRows, availableDp);
+        return buildWeekExpanded(context, schedule, breakpoints, activeDays, occupiedRows, scale, rawPhase);
+    }
+
+    /** All rows always shown -- shrinks text/padding/height to fit instead of truncating. */
+    private static float computeWeekRowScale(int totalRows, int availableDp) {
+        if (totalRows <= 0 || availableDp == Integer.MAX_VALUE) return 1f;
+        int availableForRows = availableDp - WEEK_BASE_HEIGHT_DP;
+        float targetRowHeightDp = (float) availableForRows / totalRows;
+        float scale = targetRowHeightDp / WEEK_ROW_HEIGHT_DP;
+        return Math.max(WEEK_MIN_ROW_SCALE, Math.min(1f, scale));
     }
 
     /** Compact "headline + next class + week dots" summary -- used when the grid won't fit, or the semester isn't in session. */
     private static RemoteViews buildWeekCompact(Context context, List<ClassSession> schedule,
-                                                 SettingsStore.SemesterPhase phase, SettingsStore.SemesterPhase rawPhase) {
-        RemoteViews rv = new RemoteViews(context.getPackageName(), R.layout.week_widget);
+                                                 SettingsStore.SemesterPhase phase, SettingsStore.SemesterPhase rawPhase,
+                                                 Bundle options) {
+        RemoteViews rv = new RemoteViews(context.getPackageName(), layoutWeek);
         bindGear(context, rv);
         bindViewFullSchedule(context, rv);
+        bindSaveButton(context, rv);
+        bindForm5Button(context, rv);
         bindHeaderBrandLabel(context, rv, WeekWidgetProvider.class,
                 WeekWidgetProvider.ACTION_TOGGLE_PREVIEW, "WEEKLY", rawPhase, 5);
 
@@ -280,12 +398,10 @@ public final class WidgetRenderer {
         int nowMin = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE);
 
         if (phase == SettingsStore.SemesterPhase.UPCOMING) {
-            // Only reached when NOT already previewing (previewing folds phase
-            // to ACTIVE upstream) -- so this is always the "off" state, safe
-            // to offer turning preview on here.
+            LocalDate start = SettingsStore.getSemesterStart(context);
             rv.setTextViewText(R.id.summary_headline, "Semester hasn't started yet.");
             rv.setTextViewText(R.id.summary_sub,
-                    "Classes begin " + formatSemesterDate(SettingsStore.getSemesterStart(context)) + ". Tap to preview anyway.");
+                    "Classes begin " + formatSemesterDate(start) + daysSuffix(daysUntil(start)) + ". Tap to preview anyway.");
             rv.setTextViewText(R.id.summary_next, "");
             bindToggleTap(context, rv, R.id.summary_sub, WeekWidgetProvider.class,
                     WeekWidgetProvider.ACTION_TOGGLE_PREVIEW, 6);
@@ -305,9 +421,11 @@ public final class WidgetRenderer {
                 if (!c.creditsExcluded) totalUnits += c.credits;
                 classCount++;
             }
+            long daysToEnd = daysUntil(SettingsStore.getSemesterEnd(context));
             rv.setTextViewText(R.id.summary_headline,
                     classCount + (classCount == 1 ? " class" : " classes")
-                            + " \u00B7 " + String.format(Locale.US, "%.1f", totalUnits) + " units");
+                            + " \u00B7 " + String.format(Locale.US, "%.1f", totalUnits) + " units"
+                            + (daysToEnd > 0 ? " \u00B7 " + daysToEnd + "d left" : ""));
 
             ClassSession upcoming = null;
             int upcomingDay = -1;
@@ -338,31 +456,38 @@ public final class WidgetRenderer {
         }
 
         rv.removeAllViews(R.id.week_dots_row);
-        for (int dayIdx : WEEK_ORDER) {
-            boolean hasClasses = false;
-            for (ClassSession c : schedule) if (c.days.contains(dayIdx)) { hasClasses = true; break; }
-            RemoteViews dot = new RemoteViews(context.getPackageName(), R.layout.row_week_dot);
-            dot.setTextViewText(R.id.week_dot_label, DAY_LABELS[dayIdx].substring(0, 1));
-            dot.setInt(R.id.week_dot_label, "setTextColor", dayIdx == today ? INK : INK_DIM);
-            if (dayIdx == today) {
-                dot.setImageViewResource(R.id.week_dot, R.drawable.dot_red);
-            } else {
-                dot.setImageViewResource(R.id.week_dot, hasClasses ? R.drawable.dot_has_class : R.drawable.dot_dim);
+        int availableDp = currentPortraitHeightDp(options);
+        boolean roomForDots = availableDp == Integer.MAX_VALUE
+                || availableDp - WEEK_BASE_HEIGHT_DP >= WEEK_DOTS_ROW_HEIGHT_DP + WEEK_DOTS_ROW_MARGIN_DP;
+        if (roomForDots) {
+            for (int dayIdx : WEEK_ORDER) {
+                boolean hasClasses = false;
+                for (ClassSession c : schedule) if (c.days.contains(dayIdx)) { hasClasses = true; break; }
+                RemoteViews dot = new RemoteViews(context.getPackageName(), layoutRowWeekDot);
+                dot.setTextViewText(R.id.week_dot_label, DAY_LABELS[dayIdx].substring(0, 1));
+                dot.setInt(R.id.week_dot_label, "setTextColor", dayIdx == today ? ink : inkDim);
+                if (dayIdx == today) {
+                    dot.setImageViewResource(R.id.week_dot, drawableDotAccent);
+                } else {
+                    dot.setImageViewResource(R.id.week_dot, hasClasses ? drawableDotHasClass : drawableDotDim);
+                }
+                rv.addView(R.id.week_dots_row, dot);
             }
-            rv.addView(R.id.week_dots_row, dot);
         }
 
         return rv;
     }
 
-    /** CRS-style time/day grid, showing as many rows as fit the current height. */
+    /** CRS-style time/day grid. Always shows every occupied time slot -- row size adapts (see buildWeekTable). */
     private static RemoteViews buildWeekExpanded(Context context, List<ClassSession> schedule,
                                                   List<Integer> breakpoints, List<Integer> activeDays,
-                                                  List<Integer> occupiedRows, int rowsToShow,
+                                                  List<Integer> occupiedRows, float scale,
                                                   SettingsStore.SemesterPhase rawPhase) {
-        RemoteViews rv = new RemoteViews(context.getPackageName(), R.layout.week_widget_expanded);
+        RemoteViews rv = new RemoteViews(context.getPackageName(), layoutWeekExpanded);
         bindGear(context, rv);
         bindViewFullSchedule(context, rv);
+        bindSaveButton(context, rv);
+        bindForm5Button(context, rv);
         bindHeaderBrandLabel(context, rv, WeekWidgetProvider.class,
                 WeekWidgetProvider.ACTION_TOGGLE_PREVIEW, "WEEKLY", rawPhase, 5);
 
@@ -372,7 +497,7 @@ public final class WidgetRenderer {
                 schedule.size() + (schedule.size() == 1 ? " class" : " classes")
                         + " \u00B7 " + String.format(Locale.US, "%.1f", totalUnits) + " units");
 
-        buildWeekTable(context, rv, schedule, breakpoints, activeDays, occupiedRows, rowsToShow);
+        buildWeekTable(context, rv, schedule, breakpoints, activeDays, occupiedRows, scale);
 
         String noClassDays = noClassDaysLabel(activeDays);
         if (noClassDays.isEmpty()) {
@@ -385,77 +510,81 @@ public final class WidgetRenderer {
         return rv;
     }
 
+    /** Every occupied row, no truncation; shrinks cell size/padding when scale < 1f. */
     private static void buildWeekTable(Context context, RemoteViews rv, List<ClassSession> schedule,
                                         List<Integer> breakpoints, List<Integer> activeDays,
-                                        List<Integer> occupiedRows, int rowsToShow) {
+                                        List<Integer> occupiedRows, float scale) {
         rv.removeAllViews(R.id.week_table_container);
 
         Calendar now = Calendar.getInstance();
         int today = calendarDayToJs(now.get(Calendar.DAY_OF_WEEK));
+        float density = context.getResources().getDisplayMetrics().density;
 
-        // header row: blank corner cell + one day-letter cell per day that
-        // actually has a class this week. Days with nothing scheduled at all
-        // (weekends, for most students) are dropped entirely rather than
-        // rendered as a column of dots all the way down -- that column was
-        // pure visual noise and its width is better spent on the days that
-        // matter.
-        RemoteViews headerRow = new RemoteViews(context.getPackageName(), R.layout.row_week_table);
-        RemoteViews corner = new RemoteViews(context.getPackageName(), R.layout.cell_week_table_time);
+        RemoteViews headerRow = new RemoteViews(context.getPackageName(), layoutRowWeekTable);
+        RemoteViews corner = new RemoteViews(context.getPackageName(), layoutCellTime);
         corner.setTextViewText(R.id.cell_time_text, "");
+        scaleTimeCell(corner, scale, density);
         headerRow.addView(R.id.table_row, corner);
         for (int dayIdx : activeDays) {
-            RemoteViews dayCell = new RemoteViews(context.getPackageName(), R.layout.cell_week_table_daylabel);
+            RemoteViews dayCell = new RemoteViews(context.getPackageName(), layoutCellDayLabel);
             dayCell.setTextViewText(R.id.cell_daylabel_text, DAY_LABELS[dayIdx].substring(0, 1));
-            dayCell.setInt(R.id.cell_daylabel_text, "setTextColor", dayIdx == today ? INK : INK_DIM);
+            dayCell.setInt(R.id.cell_daylabel_text, "setTextColor", dayIdx == today ? ink : inkDim);
+            scaleDayLabelCell(dayCell, scale, density);
             headerRow.addView(R.id.table_row, dayCell);
         }
         rv.addView(R.id.week_table_container, headerRow);
 
-        // one data row per breakpoint slot that has a class on at least one
-        // active day -- slots that are empty everywhere (a natural gap
-        // between classes, e.g. a half hour nobody has anything) are skipped
-        // rather than rendered as a row of dots that says nothing. Capped at
-        // however many rows actually fit (see buildWeekSummary()).
-        int shown = Math.min(rowsToShow, occupiedRows.size());
-        for (int i = 0; i < shown; i++) {
-            int r = occupiedRows.get(i);
+        for (int r : occupiedRows) {
             int slotStart = breakpoints.get(r);
             int slotEnd = breakpoints.get(r + 1);
 
-            RemoteViews row = new RemoteViews(context.getPackageName(), R.layout.row_week_table);
-            RemoteViews timeCell = new RemoteViews(context.getPackageName(), R.layout.cell_week_table_time);
+            RemoteViews row = new RemoteViews(context.getPackageName(), layoutRowWeekTable);
+            RemoteViews timeCell = new RemoteViews(context.getPackageName(), layoutCellTime);
             timeCell.setTextViewText(R.id.cell_time_text, compactRangeLabel(slotStart, slotEnd));
+            scaleTimeCell(timeCell, scale, density);
             row.addView(R.id.table_row, timeCell);
 
             for (int dayIdx : activeDays) {
                 ClassSession match = findClassInSlot(schedule, dayIdx, slotStart, slotEnd);
-                RemoteViews classCell = new RemoteViews(context.getPackageName(), R.layout.cell_week_table_class);
+                RemoteViews classCell = new RemoteViews(context.getPackageName(), layoutCellClass);
                 if (match != null) {
                     classCell.setViewVisibility(R.id.cell_class_text, View.VISIBLE);
                     classCell.setViewVisibility(R.id.cell_dot_image, View.GONE);
                     classCell.setTextViewText(R.id.cell_class_text, abbreviateName(match.name));
-                    classCell.setInt(R.id.cell_class_text, "setTextColor", dayIdx == today ? RED : INK);
+                    classCell.setInt(R.id.cell_class_text, "setTextColor", dayIdx == today ? accent : ink);
                 } else {
                     classCell.setViewVisibility(R.id.cell_class_text, View.GONE);
                     classCell.setViewVisibility(R.id.cell_dot_image, View.VISIBLE);
                 }
+                scaleClassCell(classCell, scale, density);
                 row.addView(R.id.table_row, classCell);
             }
             rv.addView(R.id.week_table_container, row);
         }
-
-        int remaining = occupiedRows.size() - shown;
-        if (remaining > 0) {
-            rv.addView(R.id.week_table_container, moreIndicatorRow(context,
-                    "+" + remaining + " more time slot" + (remaining == 1 ? "" : "s")));
-        }
     }
 
-    /**
-     * Every distinct class start/end minute across the week, sorted -- the grid's row
-     * boundaries. Public so ScheduleImageExporter can build the same grid at full
-     * resolution for the "save to gallery" export.
-     */
+    private static int dpToPx(float density, float dp) {
+        return Math.round(dp * density);
+    }
+
+    private static void scaleTimeCell(RemoteViews cell, float scale, float density) {
+        cell.setTextViewTextSize(R.id.cell_time_text, TypedValue.COMPLEX_UNIT_SP, 8f * scale);
+        int vPad = dpToPx(density, 3f * scale);
+        cell.setViewPadding(R.id.cell_time_text, 0, vPad, 0, vPad);
+    }
+
+    private static void scaleDayLabelCell(RemoteViews cell, float scale, float density) {
+        cell.setTextViewTextSize(R.id.cell_daylabel_text, TypedValue.COMPLEX_UNIT_SP, 9f * scale);
+        cell.setViewPadding(R.id.cell_daylabel_text, 0, 0, 0, dpToPx(density, 4f * scale));
+    }
+
+    private static void scaleClassCell(RemoteViews cell, float scale, float density) {
+        cell.setTextViewTextSize(R.id.cell_class_text, TypedValue.COMPLEX_UNIT_SP, 7f * scale);
+        int vPad = dpToPx(density, 2f * scale);
+        cell.setViewPadding(R.id.cell_class_text, 0, vPad, 0, vPad);
+        cell.setInt(R.id.cell_class_frame, "setMinimumHeight", dpToPx(density, 18f * scale));
+    }
+
     public static List<Integer> weekBreakpoints(List<ClassSession> schedule) {
         TreeSet<Integer> set = new TreeSet<>();
         for (ClassSession c : schedule) {
@@ -465,10 +594,6 @@ public final class WidgetRenderer {
         return new ArrayList<>(set);
     }
 
-    /**
-     * Days (in WEEK_ORDER order) that have at least one class this week. Public so
-     * ScheduleImageExporter can drop the same empty columns from the gallery export.
-     */
     public static List<Integer> activeWeekDays(List<ClassSession> schedule) {
         List<Integer> result = new ArrayList<>();
         for (int dayIdx : WEEK_ORDER) {
@@ -479,11 +604,6 @@ public final class WidgetRenderer {
         return result;
     }
 
-    /**
-     * Indices (into breakpoints, i.e. row r spans [breakpoints[r], breakpoints[r+1]))
-     * of the rows that have a class on at least one of the given days. Public so
-     * ScheduleImageExporter can skip the same empty gap rows in the gallery export.
-     */
     public static List<Integer> occupiedRowIndices(List<ClassSession> schedule, List<Integer> breakpoints,
                                                     List<Integer> days) {
         List<Integer> result = new ArrayList<>();
@@ -501,13 +621,6 @@ public final class WidgetRenderer {
         return result;
     }
 
-    /**
-     * "No classes on: Sat, Sun" style note listing the days (in WEEK_ORDER order)
-     * that have zero classes this week -- empty string if every day has at least
-     * one. Shown under the grid so dropping those columns entirely (see
-     * activeWeekDays()) reads as "there's nothing scheduled here", not as the
-     * grid having quietly forgotten a day.
-     */
     public static String noClassDaysLabel(List<Integer> activeDays) {
         StringBuilder sb = new StringBuilder();
         for (int dayIdx : WEEK_ORDER) {
@@ -520,7 +633,6 @@ public final class WidgetRenderer {
         return sb.length() == 0 ? "" : "No classes on: " + sb;
     }
 
-    /** The class (if any) that fully spans [slotStart, slotEnd) on the given day. */
     public static ClassSession findClassInSlot(List<ClassSession> schedule, int dayIdx, int slotStart, int slotEnd) {
         for (ClassSession c : schedule) {
             if (!c.days.contains(dayIdx)) continue;
@@ -529,13 +641,7 @@ public final class WidgetRenderer {
         return null;
     }
 
-    /**
-     * Short subject+catalog-number label for the grid's narrow cells, e.g.
-     * "Philo 1 THV-3" -> "PHILO 1", "KAS 1 THW2" -> "KAS 1". Just the class
-     * name's first two whitespace-separated tokens, upper-cased -- the section
-     * code (THV-3, THW2, etc.) is dropped since there's no room for it here.
-     * Public so ScheduleImageExporter can render cells identically to the widget.
-     */
+    /** "Philo 1 THV-3" -> "PHILO 1". Public so ScheduleImageExporter renders cells identically. */
     public static String abbreviateName(String name) {
         if (name == null) return "";
         String[] tokens = name.trim().split("\\s+");
@@ -549,31 +655,22 @@ public final class WidgetRenderer {
 
     // Shared pieces
 
-    /**
-     * Builds one class row for the Today widget's scrollable ListView. Rows that
-     * come from a RemoteViewsFactory can't carry their own PendingIntent directly
-     * (the platform throws if you try) -- they use setOnClickFillInIntent()
-     * instead, merged into the single PendingIntentTemplate set on the ListView
-     * itself (see bindTodayListAdapter()). Called from
-     * TodayClassesRemoteViewsService.Factory.getViewAt(); public for that reason.
-     */
+    /** Called from TodayClassesRemoteViewsService.Factory.getViewAt(); public for that reason. */
     public static RemoteViews buildClassRowForAdapter(Context context, ClassSession c, boolean isNow, int index, boolean isLast) {
-        RemoteViews row = new RemoteViews(context.getPackageName(), R.layout.row_class);
-        // Last row: drop its own inter-row gap so it doesn't stack on top of
-        // today_list_wrapper's outer bottom padding and read as an oversized gap.
-        if (isLast) {
-            row.setViewPadding(R.id.row_class_root, 0, 0, 0, 0);
-        }
+        resolveThemeAssets(context);
+        RemoteViews row = new RemoteViews(context.getPackageName(), layoutRowClass);
+        // Always set explicitly -- recycled rows keep a stale padding otherwise (the squished-row bug).
+        int bottomPaddingDp = isLast ? 0 : 4;
+        int bottomPaddingPx = Math.round(bottomPaddingDp * context.getResources().getDisplayMetrics().density);
+        row.setViewPadding(R.id.row_class_root, 0, 0, 0, bottomPaddingPx);
         row.setTextViewText(R.id.row_time, minToLabel(c.start) + "\n" + minToLabel(c.end));
         row.setTextViewText(R.id.row_name, c.name);
         String meta = c.displayRoom() + (c.instructor != null && !c.instructor.isEmpty() ? " \u00B7 " + c.instructor : "");
         row.setTextViewText(R.id.row_room, meta);
-        row.setInt(R.id.row_root, "setBackgroundResource", isNow ? R.drawable.row_bg_now : R.drawable.row_bg);
-        row.setInt(R.id.row_time, "setTextColor", isNow ? RED : INK_DIM);
-        row.setImageViewResource(R.id.row_badge, isNow ? R.drawable.dot_red : R.drawable.dot_dim);
+        row.setInt(R.id.row_root, "setBackgroundResource", isNow ? drawableRowBgNow : drawableRowBg);
+        row.setInt(R.id.row_time, "setTextColor", isNow ? accent : inkDim);
+        row.setImageViewResource(R.id.row_badge, isNow ? drawableDotAccent : drawableDotDim);
 
-        // Tap a class row -> ask whether to open a maps app for its location.
-        // Only wired up when there's an actual room set (not blank/TBA).
         String mapQuery = (c.room != null && !c.room.trim().isEmpty() && !c.room.equalsIgnoreCase("TBA"))
                 ? c.room
                 : null;
@@ -581,60 +678,10 @@ public final class WidgetRenderer {
             Intent fillIn = new Intent();
             fillIn.putExtra(WidgetActionActivity.EXTRA_ROOM, mapQuery);
             fillIn.putExtra(WidgetActionActivity.EXTRA_CLASS_NAME, c.name);
-            // Unique data URI per row so the system doesn't collapse distinct
-            // rows' fill-in intents together.
             fillIn.setData(Uri.parse("crsscheduler://room/" + Uri.encode(c.code) + "/" + c.start));
             row.setOnClickFillInIntent(R.id.row_root, fillIn);
         }
         return row;
-    }
-
-    /** Small dim "+N more" line appended to a list/grid that got truncated to fit. */
-    private static RemoteViews moreIndicatorRow(Context context, String text) {
-        RemoteViews row = new RemoteViews(context.getPackageName(), R.layout.row_more_indicator);
-        row.setTextViewText(R.id.more_indicator_text, text);
-        return row;
-    }
-
-    /**
-     * Points the Today widget's ListView at TodayClassesRemoteViewsService and
-     * sets up the single PendingIntentTemplate its rows' fill-in intents merge
-     * into at tap time. The service Intent's data URI must be unique per widget
-     * id -- otherwise the system can treat repeated calls as "the same adapter"
-     * and skip reloading fresh data.
-     *
-     * Also pads the bottom of the list area by whatever fraction of a row's
-     * height doesn't divide evenly into the space available, so the ListView
-     * only ever has room to draw whole rows. Without this, a ListView happily
-     * draws a partial row at its boundary -- normal, expected behavior for an
-     * interactively-scrolled list, but since each row has rounded corners, a
-     * partial one gets hard-clipped along a straight edge exactly where the
-     * rounding should be, which reads as a visual glitch rather than "there's
-     * more below, scroll for it".
-     */
-    private static void bindTodayListAdapter(Context context, RemoteViews rv, int appWidgetId, int availableDp) {
-        Intent svcIntent = new Intent(context, TodayClassesRemoteViewsService.class);
-        svcIntent.setData(Uri.parse("crsscheduler://today_list/" + appWidgetId));
-        rv.setRemoteAdapter(R.id.today_list_listview, svcIntent);
-        rv.setEmptyView(R.id.today_list_listview, R.id.today_list_empty);
-
-        if (availableDp != Integer.MAX_VALUE) {
-            int listAreaDp = Math.max(0, availableDp - TODAY_BASE_HEIGHT_DP);
-            int leftoverDp = listAreaDp % TODAY_ROW_HEIGHT_DP;
-            if (leftoverDp > 0) {
-                // Split the reserved slack top/bottom instead of dumping it all
-                // below the last row, so it doesn't read as an oversized margin.
-                int leftoverPx = Math.round(leftoverDp * context.getResources().getDisplayMetrics().density);
-                int topPx = leftoverPx / 2;
-                int bottomPx = leftoverPx - topPx;
-                rv.setViewPadding(R.id.today_list_wrapper, 0, topPx, 0, bottomPx);
-            }
-        }
-
-        Intent templateIntent = new Intent(context, WidgetActionActivity.class);
-        PendingIntent templatePi = PendingIntent.getActivity(
-                context, 3, templateIntent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        rv.setPendingIntentTemplate(R.id.today_list_listview, templatePi);
     }
 
     private static void bindGear(Context context, RemoteViews rv) {
@@ -652,53 +699,56 @@ public final class WidgetRenderer {
         rv.setOnClickPendingIntent(R.id.btn_view_full_schedule, pi);
     }
 
-    /**
-     * The header's brand label doubles as the "preview before start" on/off
-     * switch whenever the semester is genuinely UPCOMING (the *raw* phase,
-     * unaffected by the preview toggle itself) -- tapping it flips
-     * SettingsStore's preview flag via a broadcast to the given provider.
-     * Outside that state it's just static branding text, exactly as before
-     * this feature existed, so there's no visual change for the common case
-     * of a schedule that's already in session.
-     *
-     * Whenever it IS acting as the toggle, it's given the same outline/filled
-     * chip treatment as the widgets' other tappable toggles (e.g. the TMRW
-     * chip) so it actually reads as a button instead of plain text.
-     */
+    private static void bindSaveButton(Context context, RemoteViews rv) {
+        Intent intent = new Intent(context, WidgetSaveActivity.class);
+        PendingIntent pi = PendingIntent.getActivity(
+                context, 8, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        rv.setOnClickPendingIntent(R.id.btn_save, pi);
+    }
+
+    /** Opens the PDF directly if one's attached; otherwise pops the widget's upload prompt. */
+    private static void bindForm5Button(Context context, RemoteViews rv) {
+        Uri form5Uri = SettingsStore.getForm5Uri(context);
+        Intent intent;
+        if (form5Uri != null) {
+            intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(form5Uri, "application/pdf");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+        } else {
+            intent = new Intent(context, WidgetForm5PromptActivity.class);
+        }
+        PendingIntent pi = PendingIntent.getActivity(
+                context, 9, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        rv.setOnClickPendingIntent(R.id.btn_form5, pi);
+    }
+
+    /** Doubles as the "preview before start" toggle whenever the raw phase is UPCOMING. */
     private static void bindHeaderBrandLabel(Context context, RemoteViews rv, Class<?> providerClass,
                                               String toggleAction, String defaultLabel,
                                               SettingsStore.SemesterPhase rawPhase, int requestCode) {
         if (rawPhase == SettingsStore.SemesterPhase.UPCOMING) {
             boolean previewOn = SettingsStore.isPreviewBeforeStartEnabled(context);
             rv.setTextViewText(R.id.header_brand_label, previewOn ? "PREVIEW" : defaultLabel);
-            rv.setInt(R.id.header_brand_label, "setTextColor", previewOn ? BG : RED);
+            rv.setInt(R.id.header_brand_label, "setTextColor", previewOn ? bg : accent);
             rv.setInt(R.id.header_brand_label, "setBackgroundResource",
-                    previewOn ? R.drawable.chip_filled_bg : R.drawable.chip_outline_bg);
+                    previewOn ? drawableChipFilledBg : drawableChipOutlineBg);
             bindToggleTap(context, rv, R.id.header_brand_label, providerClass, toggleAction, requestCode);
         } else {
             rv.setTextViewText(R.id.header_brand_label, defaultLabel);
-            rv.setInt(R.id.header_brand_label, "setTextColor", INK_DIM);
+            rv.setInt(R.id.header_brand_label, "setTextColor", inkDim);
             rv.setInt(R.id.header_brand_label, "setBackgroundResource", android.R.color.transparent);
         }
     }
 
-    /** Reflects the Today widget's "show tomorrow instead" state onto its list-title chip and wires its tap. */
     private static void bindTomorrowToggle(Context context, RemoteViews rv, boolean active) {
         rv.setTextViewText(R.id.btn_toggle_tomorrow, active ? "TODAY" : "TMRW");
         rv.setInt(R.id.btn_toggle_tomorrow, "setBackgroundResource",
-                active ? R.drawable.chip_filled_bg : R.drawable.chip_outline_bg);
-        rv.setInt(R.id.btn_toggle_tomorrow, "setTextColor", active ? BG : INK_DIM);
+                active ? drawableChipFilledBg : drawableChipOutlineBg);
+        rv.setInt(R.id.btn_toggle_tomorrow, "setTextColor", active ? bg : inkDim);
         bindToggleTap(context, rv, R.id.btn_toggle_tomorrow, TodayWidgetProvider.class,
                 TodayWidgetProvider.ACTION_TOGGLE_TOMORROW, 7);
     }
 
-    /**
-     * Wires a plain broadcast PendingIntent to `providerClass` onto any view id --
-     * the general-purpose mechanism behind the widgets' own tappable toggles
-     * (preview-before-start, show-tomorrow). Each RemoteViews here is freshly
-     * built from scratch on every call, so there's no stale click target left
-     * behind from a previous state to worry about clearing.
-     */
     private static void bindToggleTap(Context context, RemoteViews rv, int viewId, Class<?> providerClass,
                                        String action, int requestCode) {
         Intent intent = new Intent(context, providerClass);
@@ -709,18 +759,9 @@ public final class WidgetRenderer {
     }
 
     /**
-     * The widget's current height in dp, in the host's normal (portrait) orientation, or
-     * Integer.MAX_VALUE if unknown -- so an unbound/never-resized widget defaults to
-     * showing everything rather than the most constrained state.
-     *
-     * Deliberately reads OPTION_APPWIDGET_MAX_HEIGHT, not OPTION_APPWIDGET_MIN_HEIGHT --
-     * despite the name, MIN_HEIGHT is the widget's *landscape* height (the shorter of the
-     * pair), while MAX_HEIGHT is the *portrait* height. A widget reports
-     * minWidth/maxHeight for portrait and maxWidth/minHeight for landscape, so on a
-     * normal (portrait) home screen, MAX_HEIGHT is the one that matches what's actually
-     * on screen. Reading MIN_HEIGHT here fed in a shorter-than-real value, which made the
-     * leftover-row padding math below overestimate how little room was left and clip off
-     * a row that would have genuinely fit.
+     * Reads OPTION_APPWIDGET_MAX_HEIGHT, not MIN_HEIGHT: despite the name, MIN_HEIGHT is
+     * the widget's landscape height, while MAX_HEIGHT is portrait -- the one that matches
+     * a normal home screen.
      */
     private static int currentPortraitHeightDp(Bundle options) {
         if (options == null) return Integer.MAX_VALUE;
@@ -729,7 +770,7 @@ public final class WidgetRenderer {
     }
 
     public static int calendarDayToJs(int calendarDayOfWeek) {
-        return calendarDayOfWeek - 1; // Calendar.SUNDAY=1..SATURDAY=7 -> JS Sun=0..Sat=6
+        return calendarDayOfWeek - 1;
     }
 
     public static String minToLabel(int min) {
@@ -740,12 +781,29 @@ public final class WidgetRenderer {
         return h + ":" + String.format(Locale.US, "%02d", m) + " " + mer;
     }
 
-    /** "Aug 15" style label for a semester start/end date -- year omitted since it's always near-term. */
     public static String formatSemesterDate(LocalDate date) {
         return date == null ? "" : date.format(DateTimeFormatter.ofPattern("MMM d", Locale.US));
     }
 
-    /** Compact "10a" / "11:30a" / "1p" style label for the grid's narrow time column. */
+    /**
+     * Calendar-day count from today to {@code target}, or -1 if {@code target} is null or not
+     * strictly in the future. Backs both the semester start/end countdowns below and shares its
+     * "how many days away" semantics with daysUntilNextClass() -- that one counts weekday
+     * offsets within the weekly pattern, this one counts real calendar days to a fixed date, so
+     * they're kept separate, but daysSuffix() gives both the same "in N day(s)" phrasing.
+     */
+    private static long daysUntil(LocalDate target) {
+        if (target == null) return -1;
+        long days = ChronoUnit.DAYS.between(LocalDate.now(), target);
+        return days > 0 ? days : -1;
+    }
+
+    /** " (in N days)" / " (in 1 day)", or "" if days <= 0 (today, past, or not set). */
+    private static String daysSuffix(long days) {
+        if (days <= 0) return "";
+        return " (in " + days + (days == 1 ? " day)" : " days)");
+    }
+
     public static String compactTimeLabel(int min) {
         int h = min / 60, m = min % 60;
         String mer = h >= 12 ? "p" : "a";
@@ -754,25 +812,27 @@ public final class WidgetRenderer {
         return m == 0 ? (h + mer) : (h + ":" + String.format(Locale.US, "%02d", m) + mer);
     }
 
-    /**
-     * Compact "10-11:30a" / "11:30a-1p" style range label for a table row
-     * spanning [startMin, endMin) -- shows when the slot ends, not just when
-     * it starts, which was otherwise easy to misread as "the class starting
-     * at this row's time runs the whole row" rather than "runs until the
-     * second time shown". Drops the start time's a/p suffix when it matches
-     * the end's (the usual written convention for a same-meridiem range) and
-     * keeps both when they differ.
-     *
-     * Only used where a row has room for one line (the gallery export's wide
-     * time column); the widget grid's narrow column instead stacks
-     * compactTimeLabel(start) and compactTimeLabel(end) on two lines -- see
-     * buildWeekTable().
-     */
     public static String compactRangeLabel(int startMin, int endMin) {
         String startLabel = compactTimeLabel(startMin);
         String endLabel = compactTimeLabel(endMin);
         boolean sameMeridiem = (startMin / 60 >= 12) == (endMin / 60 >= 12);
         String start = sameMeridiem ? startLabel.substring(0, startLabel.length() - 1) : startLabel;
         return start + "\u2013" + endLabel;
+    }
+
+    private static void bindTodayListAdapter(Context context, RemoteViews rv, int appWidgetId) {
+        Intent svcIntent = new Intent(context, TodayClassesRemoteViewsService.class);
+        svcIntent.setData(Uri.parse("crsscheduler://today_list/" + appWidgetId));
+        rv.setRemoteAdapter(R.id.today_list_listview, svcIntent);
+        rv.setEmptyView(R.id.today_list_listview, R.id.today_list_empty);
+
+        // No more row-count guessing/fade overlays -- ListView scrolls fine on its own; just
+        // clear any padding a previous build might have left on the host's recycled view.
+        rv.setViewPadding(R.id.today_list_wrapper, 0, 0, 0, 0);
+
+        Intent templateIntent = new Intent(context, WidgetActionActivity.class);
+        PendingIntent templatePi = PendingIntent.getActivity(
+                context, 3, templateIntent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        rv.setPendingIntentTemplate(R.id.today_list_listview, templatePi);
     }
 }

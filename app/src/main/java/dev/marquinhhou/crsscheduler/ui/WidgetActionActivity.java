@@ -13,10 +13,8 @@ import dev.marquinhhou.crsscheduler.R;
 import dev.marquinhhou.crsscheduler.data.SettingsStore;
 
 /**
- * Popped up when a class row is tapped on either widget. Widgets can't show a
- * normal AlertDialog directly (no window of their own), so this is a small
- * dialog-themed Activity instead -- the standard way to get dialog-like
- * confirmation out of a RemoteViews tap.
+ * Popped up when a class row is tapped on either widget -- a small
+ * dialog-themed Activity, since widgets can't show a normal AlertDialog.
  */
 public class WidgetActionActivity extends AppCompatActivity {
 
@@ -28,8 +26,9 @@ public class WidgetActionActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setTheme(R.style.Theme_NothingSchedule_Dialog);
-        setContentView(R.layout.activity_widget_action);
+        Theming.applyDialogTheme(this);
+        setContentView(Theming.pick(this,
+                R.layout.activity_widget_action_ge, R.layout.activity_widget_action_ne, R.layout.activity_widget_action_adaptive));
 
         String className = getIntent().getStringExtra(EXTRA_CLASS_NAME);
         room = getIntent().getStringExtra(EXTRA_ROOM);

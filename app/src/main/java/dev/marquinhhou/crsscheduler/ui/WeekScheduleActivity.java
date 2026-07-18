@@ -6,7 +6,6 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -38,16 +37,15 @@ import dev.marquinhhou.crsscheduler.model.ClassSession;
 import dev.marquinhhou.crsscheduler.widget.WidgetRenderer;
 
 /**
- * The full "entire schedule" experience, as a real in-app screen rather than
- * crammed into a widget. This is where the whole week is genuinely scrollable
- * and every class is tappable (maps prompt shown as a normal AlertDialog here,
- * since we have a real window to work with).
+ * The full "entire schedule" experience as a real in-app screen -- the whole
+ * week is genuinely scrollable and every class is tappable (maps prompt shown
+ * as a normal AlertDialog here, since we have a real window to work with).
  */
 public class WeekScheduleActivity extends AppCompatActivity {
 
-    private static final int RED = Color.parseColor("#FF2E17");
-    private static final int INK = Color.parseColor("#F3F2ED");
-    private static final int INK_DIM = Color.parseColor("#8B8B86");
+    private int accent, ink, inkDim;
+    private int layoutRowDayEmpty, layoutRowDayHeader, layoutRowClass;
+    private int drawableDotAccent, drawableDotDim;
 
     private boolean redirectedForTerms = false;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
@@ -80,7 +78,10 @@ public class WeekScheduleActivity extends AppCompatActivity {
             return;
         }
 
-        setContentView(R.layout.activity_week_schedule);
+        Theming.applyActivityTheme(this);
+        resolveThemeAssets();
+        setContentView(Theming.pick(this,
+                R.layout.activity_week_schedule_ge, R.layout.activity_week_schedule_ne, R.layout.activity_week_schedule_adaptive));
 
         findViewById(R.id.btn_back).setOnClickListener(v -> finish());
         findViewById(R.id.btn_settings).setOnClickListener(v ->
@@ -89,6 +90,17 @@ public class WeekScheduleActivity extends AppCompatActivity {
         findViewById(R.id.btn_export_ics).setOnClickListener(v -> onExportIcsTapped());
 
         buildWeek();
+    }
+
+    private void resolveThemeAssets() {
+        accent = Theming.color(this, R.color.ge_accent, R.color.ne_accent, R.color.adaptive_accent);
+        ink = Theming.color(this, R.color.ge_ink, R.color.ne_ink, R.color.adaptive_ink);
+        inkDim = Theming.color(this, R.color.ge_ink_dim, R.color.ne_ink_dim, R.color.adaptive_ink_dim);
+        layoutRowDayEmpty = Theming.pick(this, R.layout.row_day_empty_ge, R.layout.row_day_empty_ne, R.layout.row_day_empty_adaptive);
+        layoutRowDayHeader = Theming.pick(this, R.layout.row_day_header_ge, R.layout.row_day_header_ne, R.layout.row_day_header_adaptive);
+        layoutRowClass = Theming.pick(this, R.layout.row_class_ge, R.layout.row_class_ne, R.layout.row_class_adaptive);
+        drawableDotAccent = Theming.pick(this, R.drawable.dot_accent_ge, R.drawable.dot_accent_ne, R.drawable.dot_accent_adaptive);
+        drawableDotDim = Theming.pick(this, R.drawable.dot_dim_ge, R.drawable.dot_dim_ne, R.drawable.dot_dim_adaptive);
     }
 
     @Override
@@ -108,7 +120,7 @@ public class WeekScheduleActivity extends AppCompatActivity {
         int today = now.get(Calendar.DAY_OF_WEEK) - 1;
 
         if (schedule.isEmpty()) {
-            View empty = inflater.inflate(R.layout.row_day_empty, container, false);
+            View empty = inflater.inflate(layoutRowDayEmpty, container, false);
             ((TextView) empty.findViewById(R.id.day_empty_text))
                     .setText("No schedule loaded. Tap the gear to add one.");
             container.addView(empty);
@@ -117,7 +129,7 @@ public class WeekScheduleActivity extends AppCompatActivity {
 
         SettingsStore.SemesterPhase phase = SettingsStore.effectiveDisplayPhase(this);
         if (phase == SettingsStore.SemesterPhase.UPCOMING || phase == SettingsStore.SemesterPhase.ENDED) {
-            View empty = inflater.inflate(R.layout.row_day_empty, container, false);
+            View empty = inflater.inflate(layoutRowDayEmpty, container, false);
             String message = phase == SettingsStore.SemesterPhase.UPCOMING
                     ? "Semester hasn't started yet. Classes begin "
                             + WidgetRenderer.formatSemesterDate(SettingsStore.getSemesterStart(this)) + "."
@@ -129,13 +141,13 @@ public class WeekScheduleActivity extends AppCompatActivity {
         }
 
         for (int dayIdx : WidgetRenderer.WEEK_ORDER) {
-            View head = inflater.inflate(R.layout.row_day_header, container, false);
+            View head = inflater.inflate(layoutRowDayHeader, container, false);
             TextView dayLabel = head.findViewById(R.id.day_label);
             dayLabel.setText(WidgetRenderer.DAY_LABELS[dayIdx]);
             boolean isToday = dayIdx == today;
             ((ImageView) head.findViewById(R.id.day_dot))
-                    .setImageResource(isToday ? R.drawable.dot_red : R.drawable.dot_dim);
-            dayLabel.setTextColor(isToday ? INK : INK_DIM);
+                    .setImageResource(isToday ? drawableDotAccent : drawableDotDim);
+            dayLabel.setTextColor(isToday ? ink : inkDim);
             container.addView(head);
 
             List<ClassSession> items = new ArrayList<>();
@@ -143,7 +155,7 @@ public class WeekScheduleActivity extends AppCompatActivity {
             items.sort((a, b) -> Integer.compare(a.start, b.start));
 
             if (items.isEmpty()) {
-                View dash = inflater.inflate(R.layout.row_day_empty, container, false);
+                View dash = inflater.inflate(layoutRowDayEmpty, container, false);
                 ((TextView) dash.findViewById(R.id.day_empty_text)).setText("\u2014");
                 container.addView(dash);
             } else {
@@ -153,7 +165,7 @@ public class WeekScheduleActivity extends AppCompatActivity {
     }
 
     private View buildRow(LayoutInflater inflater, LinearLayout parent, ClassSession c) {
-        View row = inflater.inflate(R.layout.row_class, parent, false);
+        View row = inflater.inflate(layoutRowClass, parent, false);
         ((TextView) row.findViewById(R.id.row_time))
                 .setText(WidgetRenderer.minToLabel(c.start) + "\n" + WidgetRenderer.minToLabel(c.end));
         ((TextView) row.findViewById(R.id.row_name)).setText(c.name);
@@ -194,11 +206,7 @@ public class WeekScheduleActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * Below Android 10, writing into the shared gallery via MediaStore still needs
-     * WRITE_EXTERNAL_STORAGE at runtime. On 10+ (scoped storage) inserting into our
-     * own MediaStore entry needs no permission at all, so this just proceeds there.
-     */
+    /** Pre-Android 10 needs WRITE_EXTERNAL_STORAGE at runtime; 10+ scoped storage needs nothing. */
     private void onSaveToGalleryTapped() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
                 || ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)

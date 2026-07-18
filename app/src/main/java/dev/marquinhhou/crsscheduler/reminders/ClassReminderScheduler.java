@@ -15,15 +15,8 @@ import dev.marquinhhou.crsscheduler.data.SettingsStore;
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 
 /**
- * Schedules one AlarmManager alarm per (class, day-it-meets) pair, at
- * classStart - leadMinutes. Each alarm is a *single* future occurrence, not a
- * repeating one -- ClassReminderReceiver re-anchors everything (including
- * that same alarm's next weekly occurrence) every time it fires, which also
- * means schedule edits and lead-time changes get picked up automatically the
- * next time a reminder fires. WidgetRefreshScheduler additionally calls
- * rescheduleAll() on every ~15 min widget tick, so a semester's
- * UPCOMING -> ACTIVE (or ACTIVE -> ENDED) transition is picked up on its own,
- * without the user needing to reopen settings once the semester actually starts.
+ * One AlarmManager alarm per (class, day) pair, at classStart - leadMinutes. Each fire
+ * re-anchors its own next weekly occurrence, so edits and lead-time changes self-heal.
  */
 public final class ClassReminderScheduler {
 

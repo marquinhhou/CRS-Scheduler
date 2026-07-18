@@ -15,13 +15,7 @@ import java.util.Locale;
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 import dev.marquinhhou.crsscheduler.model.ScheduleSnapshot;
 
-/**
- * Keeps a history of previously-active schedules so replacing the current one
- * (importing a new CRS page, or hitting Clear) doesn't silently lose the old
- * one. ConfigureActivity archives the outgoing schedule here right before
- * overwriting or clearing it. Newest first; capped at MAX_ENTRIES so this can't
- * grow without bound from repeated re-imports.
- */
+/** Archive of past schedules so replacing/clearing the active one isn't a dead end. Newest first, capped at MAX_ENTRIES. */
 public final class ScheduleHistoryStore {
 
     private static final String PREFS = "nothing_schedule_prefs";

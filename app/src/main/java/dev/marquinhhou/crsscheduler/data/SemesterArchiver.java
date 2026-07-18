@@ -7,17 +7,7 @@ import java.util.List;
 
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 
-/**
- * Auto-archives the live schedule once its configured semesterEnd date has
- * passed, so "no end date yet" -> off -> pick an end date actually means
- * something: the schedule doesn't just sit there showing an ENDED gate
- * forever, it gets moved to Saved Schedules and cleared, same as a manual
- * Clear from ConfigureActivity would do.
- *
- * Guarded by KEY_LAST_AUTO_ARCHIVED_END so this only fires once per
- * configured end date -- safe to call on every widget refresh (every ~15
- * min) without re-archiving an already-empty schedule repeatedly.
- */
+/** Auto-archives the live schedule to history once semesterEnd passes, same as a manual Clear. */
 public final class SemesterArchiver {
 
     private SemesterArchiver() {}

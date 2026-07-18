@@ -13,16 +13,8 @@ import dev.marquinhhou.crsscheduler.data.SettingsStore;
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 
 /**
- * Builds a standard RFC 5545 .ics file from the schedule: one weekly-recurring
- * VEVENT per (class, day-it-meets) pair, anchored to the first real calendar
- * date that weekday falls on -- semesterStart if one's set, otherwise today --
- * and bounded by semesterEnd if configured. An "ongoing" schedule with no end
- * date just recurs with no UNTIL, which every mainstream calendar app treats
- * as "repeats forever" without complaint.
- *
- * Times are written as floating local time (no TZID, no trailing "Z") rather
- * than pinned to a specific IANA zone -- simpler, and correct for the common
- * case of importing into a calendar already set to the student's own timezone.
+ * Builds an .ics file: one weekly-recurring VEVENT per (class, day) pair, anchored to
+ * semesterStart (or today) and bounded by semesterEnd if set. Floating local time, no TZID.
  */
 public final class IcsExporter {
 

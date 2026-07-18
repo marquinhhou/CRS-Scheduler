@@ -22,7 +22,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
-        android:theme="@style/Theme.NothingSchedule"
+        android:theme="@style/Theme.CRSScheduler.GE"
         android:supportsRtl="true">
 
         <!-- Tier 1 smart-stack card: today's classes. No launcher activity on
@@ -60,11 +60,12 @@
 
         <!-- Required config screen: shown once when the Today widget is dropped
              on the home screen, and reused whenever the user taps the gear icon
-             on either widget to re-paste a schedule or edit class info. -->
+             on either widget to re-paste a schedule or edit class info. Also
+             where the GE/NE/Adaptive theme picker lives. -->
         <activity
             android:name=".ui.ConfigureActivity"
             android:exported="true"
-            android:theme="@style/Theme.NothingSchedule"
+            android:theme="@style/Theme.CRSScheduler.GE"
             android:label="@string/configure_title">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
@@ -76,7 +77,7 @@
         <activity
             android:name=".ui.WeekScheduleActivity"
             android:exported="false"
-            android:theme="@style/Theme.NothingSchedule"
+            android:theme="@style/Theme.CRSScheduler.GE"
             android:label="@string/week_schedule_title" />
 
         <!-- Browse/reactivate/delete previously-active schedules, reached from
@@ -84,7 +85,7 @@
         <activity
             android:name=".ui.ScheduleHistoryActivity"
             android:exported="false"
-            android:theme="@style/Theme.NothingSchedule"
+            android:theme="@style/Theme.CRSScheduler.GE"
             android:label="Saved Schedules" />
 
         <!-- Small dialog-themed popup asking whether to open a maps app, shown
@@ -93,7 +94,22 @@
         <activity
             android:name=".ui.WidgetActionActivity"
             android:exported="false"
-            android:theme="@style/Theme.NothingSchedule.Dialog" />
+            android:theme="@style/Theme.CRSScheduler.GE.Dialog" />
+
+        <!-- The widget's Save button: a small dialog-themed popup choosing Image or .ics.
+             Not exported: only ever launched via our own widgets' PendingIntents. -->
+        <activity
+            android:name=".ui.WidgetSaveActivity"
+            android:exported="false"
+            android:theme="@style/Theme.CRSScheduler.GE.Dialog" />
+
+        <!-- The widget's Form 5 button when nothing's uploaded yet: a small dialog-themed
+             popup prompting for the PDF right there. Not exported: only ever launched via
+             our own widgets' PendingIntents. -->
+        <activity
+            android:name=".ui.WidgetForm5PromptActivity"
+            android:exported="false"
+            android:theme="@style/Theme.CRSScheduler.GE.Dialog" />
 
         <!-- Backs the scrollable class list inside the Today widget. RemoteViews
              has no plain scroll container; real in-widget scrolling only exists
@@ -118,6 +134,18 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Re-anchors reminder/tick alarms when the wall clock jumps (manual clock or
+             timezone change) or the day rolls over, so nothing fires at the wrong moment. -->
+        <receiver
+            android:name=".reminders.TimeChangeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
             </intent-filter>
         </receiver>
 

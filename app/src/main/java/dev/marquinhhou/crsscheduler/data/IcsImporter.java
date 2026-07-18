@@ -14,23 +14,10 @@ import java.util.regex.Pattern;
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 
 /**
- * Parses a standard RFC 5545 .ics calendar file into a list of ClassSession --
- * the reverse of IcsExporter, so a schedule exported from here (or from most
- * any calendar app/university system that exports .ics) can be re-imported.
- * Only the weekly meeting pattern is kept (day-of-week + time-of-day for each
- * VEVENT/RRULE); the file's actual calendar dates are discarded, matching how
- * the rest of the app represents a class purely as "which weekdays, what
- * time" rather than a specific semester's real dates.
- *
- * Events that share the same title, location, and time are merged into a
- * single ClassSession spanning all of their days -- this is exactly the
- * shape IcsExporter itself produces (one VEVENT per class-day pair), so a
- * file exported from here round-trips back into the original multi-day class
- * instead of splintering into one row per weekday.
- *
- * There's no ICS analog for "credits", so every imported class comes in with
- * credits=0 and creditsExcluded=true -- marked as not counting toward the
- * unit total, rather than silently reporting a fabricated "0.0 units".
+ * Parses a .ics file back into ClassSessions (reverse of IcsExporter). Keeps only the
+ * weekly day/time pattern, not actual calendar dates. Same-title/location/time events
+ * merge into one multi-day ClassSession. No ICS credits field, so imports come in at
+ * 0 units, flagged creditsExcluded.
  */
 public final class IcsImporter {
 

@@ -9,11 +9,7 @@ import java.util.List;
 
 /**
  * A single enlisted class/session, parsed from the CRS "Enlisted Classes" table.
- * Mirrors the shape of the `schedule` objects used by the original web widget.
- *
- * Room/instructor/units start out exactly as CRS reported them, but can be
- * manually corrected any time via the Edit Class Info screen (see
- * withEditedInfo()).
+ * Room/instructor/units can be corrected later via Edit Class Info (withEditedInfo()).
  */
 public class ClassSession {
 

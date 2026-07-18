@@ -12,17 +12,8 @@ import dev.marquinhhou.crsscheduler.data.SettingsStore;
 
 /**
  * Tier 1 of the "smart stack" pair: shows today's classes. Sized the same as
- * {@link WeekWidgetProvider} so the two can be dropped into a single stack by
- * launchers that support widget stacking (e.g. drag one on top of the other).
- *
- * Each placed widget instance can be resized independently, so its RemoteViews
- * are rebuilt per-id using that instance's own current options (see
- * WidgetRenderer.buildToday()) rather than a single shared RemoteViews applied
- * to every id. The class list is a real ListView backed by
- * TodayClassesRemoteViewsService, so after every rebuild we also explicitly
- * tell the widget manager that list's data may have changed -- relying on
- * setRemoteAdapter() alone to pick up fresh data on repeat calls with the same
- * service Intent isn't guaranteed.
+ * {@link WeekWidgetProvider} so launchers can stack the two together. Each instance
+ * rebuilds its own RemoteViews from its own current size options.
  */
 public class TodayWidgetProvider extends AppWidgetProvider {
 

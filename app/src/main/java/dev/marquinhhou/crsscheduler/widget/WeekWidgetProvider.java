@@ -10,14 +10,8 @@ import android.os.Bundle;
 import dev.marquinhhou.crsscheduler.data.SettingsStore;
 
 /**
- * Tier 2 of the "smart stack" pair: a "this week" card. At typical/smaller
- * sizes it's a compact summary + teaser into the in-app full schedule
- * (WeekScheduleActivity); resized tall enough, it expands into a CRS-style
- * time/day grid instead (see WidgetRenderer.buildWeekSummary()).
- *
- * Each placed widget instance can be resized independently, so its RemoteViews
- * are rebuilt per-id using that instance's own current options rather than a
- * single shared RemoteViews applied to every id.
+ * Tier 2 of the "smart stack" pair: a "this week" card -- compact summary at typical
+ * sizes, expands into a full grid when resized taller (see buildWeekSummary()).
  */
 public class WeekWidgetProvider extends AppWidgetProvider {
 

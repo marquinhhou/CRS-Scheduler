@@ -1,21 +1,37 @@
 # CRS Scheduler
 
-A Nothing OS-inspired Android home screen widget pair for your UP CRS class
-schedule, ported from an HTML/JS prototype into a real Android Studio project.
+An Android home screen widget pair for your UP CRS class schedule.
 
 **Author:** [marquinhhou](https://github.com/marquinhhou)
-**Credits:** Marc Dizon, BS Statistics -- original concept and web prototype
-(`nothing_schedule.html`) that this app is ported and extended from.
+**Credits:** Marc Dizon, BS Statistics
 
 This is an independent, unofficial student project. It is **not affiliated
 with, endorsed by, or connected to** the University of the Philippines
-Diliman, the UP School of Statistics, the UP Computerized Registration
-System (CRS), or Nothing Technology Limited. "Nothing OS" is referenced 
-solely to describe the application's design inspiration.
+Diliman, the UP School of Statistics, or the UP Computerized Registration
+System (CRS).
 
 ---
 
+## App theme
+
+Switchable any time from the config screen ("APP THEME" card), no reinstall
+needed:
+
+- **GE** (default) -- UP-maroon accent, follows the device's light/dark
+  setting automatically.
+- **NE** -- fixed dark, red-on-black, Nothing-OS-inspired look. Doesn't
+  change with the system setting.
+- **Adaptive** -- matches the device's own Material You wallpaper colors.
+  Needs Android 12+; the chip is disabled on older versions.
+
+Whichever is picked applies to both widgets, the full schedule screen, and
+the exported schedule image alike.
+
 ## What's in the box
+
+Two separate home-screen widgets, sized the same so your launcher can stack
+them into a single "smart stack" card (drag one on top of the other on most
+launchers that support widget stacking):
 
 1. **Today** -- a hero card for your current/next class (with a countdown
    ring), plus a list of the rest of today's classes.
@@ -48,6 +64,8 @@ open your phone's maps app for that room, if a room is set.
 - **Edit Class Info** -- toggle it on in the config screen to see every
   loaded class, tap one, and manually set/correct its room, instructor,
   or unit count at any time (not just for TBA rows or blank fields).
+  Also where classes get added (for anything CRS doesn't know about, like a
+  standalone lab session) or removed, each with its own confirmation.
 - **Semester dates** -- optionally set when the schedule actually starts
   and ends. Outside that range the widgets and full schedule show a
   "not in session" state instead of treating every day as a normal school
@@ -67,7 +85,15 @@ open your phone's maps app for that room, if a room is set.
   classes instead of today's.
 - **Export your schedule** -- from the full schedule screen, save it as an
   image to your gallery, or export it as a standard `.ics` calendar file to
-  import into Google Calendar, Outlook, or any other calendar app.
+  import into Google Calendar, Outlook, or any other calendar app. The image
+  matches whichever app theme is currently active.
+- **Profile** -- optionally add your name, student number, course, and
+  year/standing in the config screen. None of it shows anywhere by default;
+  each field has its own switch for whether it's allowed onto the exported
+  schedule image.
+- **Form 5** -- optionally attach a copy of your Form 5 (official study
+  load) PDF for quick access from the config screen. Stored as a reference
+  to the file you picked, never copied or uploaded anywhere.
 - **Maps hand-off** -- tapping a class with a room set asks "Open Maps for
   X?" and, if you say yes, launches a `geo:` search intent so whichever maps
   app you have installed can handle it. An optional "Campus / school name"
@@ -78,11 +104,11 @@ open your phone's maps app for that room, if a room is set.
   room/instructor/unit edits aren't verified by the app, that class
   reminders are scheduled entirely on-device, that everything stays
   on-device, and that there's no warranty.
-- **Everything stays on-device.** All schedule data and settings are stored
-  in local `SharedPreferences` only. Nothing is ever uploaded anywhere --
-  there is no network permission in this app at all. Exporting a schedule
-  (image or `.ics`) just writes a file locally for you to share however
-  you choose.
+- **Everything stays on-device.** All schedule data and settings -- including
+  profile fields and the Form 5 reference -- are stored in local
+  `SharedPreferences` only. Nothing is ever uploaded anywhere -- there is no
+  network permission in this app at all. Exporting a schedule (image or
+  `.ics`) just writes a file locally for you to share however you choose.
 
 ## Project structure
 
@@ -95,24 +121,32 @@ app/src/main/java/dev/marquinhhou/crsscheduler/
              ScheduleStore.java         -- SharedPreferences persistence (active schedule)
              ScheduleHistoryStore.java  -- SharedPreferences persistence (archived schedules)
              SemesterArchiver.java      -- auto-archives the schedule once semesterEnd passes
-             SettingsStore.java         -- campus hint, semester dates, reminders, terms-accepted flag
+             SettingsStore.java         -- campus hint, semester dates, reminders, theme family, terms-accepted flag
   reminders/ ClassReminderScheduler.java-- schedules/cancels the per-class AlarmManager alarms
              ClassReminderReceiver.java -- fires the actual notification when an alarm goes off
              NotificationHelper.java    -- notification channel + builder
              BootReceiver.java          -- re-schedules reminders after a device reboot
   widget/    TodayWidgetProvider.java   -- tier 1 widget
              WeekWidgetProvider.java    -- tier 2 widget (summary + entry point)
-             WidgetRenderer.java        -- shared RemoteViews builder for both
+             WidgetRenderer.java        -- shared RemoteViews builder for both; resolves the
+                                           active theme family's layouts/drawables/colors on every build
              WidgetRefreshScheduler.java-- battery-friendly 15-min refresh alarm
-             RingBitmapFactory.java     -- draws the countdown "dot ring" glyph
+             RingBitmapFactory.java     -- draws the countdown ring -- NE's dot glyph or the
+                                           GE/Adaptive stroked arc
              TodayClassesRemoteViewsService.java -- ListView adapter for the Today widget
-  ui/        ConfigureActivity.java     -- import/parse/save, Edit Class Info, Terms gate
+  ui/        Theming.java               -- resolves ThemeFamily into concrete resource ids/colors
+             ConfigureActivity.java     -- import/parse/save, Edit Class Info, Terms gate, theme picker
              WeekScheduleActivity.java  -- the full in-app schedule screen
              ScheduleHistoryActivity.java -- browse/reactivate/delete Saved Schedules
              IcsExporter.java           -- builds a .ics file from the current schedule
              ScheduleImageExporter.java -- renders the schedule to a bitmap and saves it to the gallery
              WidgetActionActivity.java  -- dialog-themed "open maps?" popup
 ```
+
+Every themed layout/drawable exists as three resource variants (a
+`_ge`/`_ne`/`_adaptive` suffix) rather than being switched via `?attr/`,
+since RemoteViews (the widgets) can't apply a runtime Activity theme --
+`Theming.pick()` is the one place that decides which variant to use.
 
 ## Setting it up in Android Studio
 
@@ -147,13 +181,10 @@ if you want them counted.
 
 ## Known limitations / design notes
 
-- **Refresh granularity:** both widgets refresh every 15 minutes via
-  `AlarmManager.setInexactRepeating()`, not every minute. This needs no
-  special permission and respects Doze/App Standby, at the cost of the
-  countdown/ring being up to ~15 min stale between taps -- the same
-  granularity most weather/calendar widgets use. An exact-alarm-per-minute
-  approach was deliberately avoided as overkill and battery-unfriendly for
-  this use case.
+- **Refresh granularity:** the class list/ring redraw on a 15-minute cadence
+  generally, but the moment a class actually starts or ends is caught
+  separately by its own precise, Doze-aware alarm -- so the countdown never
+  drifts into negative numbers or shows a class that's already over.
 - **No online room lookup.** An earlier draft of this feature tried to
   web-search for TBA rooms automatically, but that would've required every
   user to register their own Google Custom Search API key just to use the
@@ -163,13 +194,25 @@ if you want them counted.
 - **Maps accuracy isn't guaranteed,** especially for manually-typed rooms --
   it's a plain text search handed to whatever maps app you have, not a
   verified campus room directory.
+- **Adaptive theme needs Android 12+** (`android.R.color.system_accent1_*`
+  / `system_neutral*_*` didn't exist before then). The chip is disabled on
+  older devices; picking it programmatically falls back to GE.
+- **Package/App ID:** `dev.marquinhhou.crsscheduler`. Change this in
+  `app/build.gradle` (`namespace` / `applicationId`) if you want to publish
+  under your own identifier.
+- **Launcher icon:** regenerate it any time with `python3 tools/generate_icon.py`
+  (requires Pillow: `pip install Pillow`) -- it writes fresh adaptive-icon
+  layers (background/foreground/monochrome) and legacy fallbacks to every
+  `mipmap-*` density directly. Edit the colors/glyph at the top of that
+  script rather than hand-editing PNGs. The launcher icon itself doesn't
+  change with the in-app theme picker.
 
 ## License
 
 MIT -- see [LICENSE](LICENSE). Third-party assets keep their own original
 open-source licenses:
 
-- Bundled fonts (JetBrains Mono, DotGothic16) -- SIL OFL 1.1, see
-  [licenses/fonts](licenses/fonts).
+- Bundled fonts (JetBrains Mono, DotGothic16), used by the NE theme -- SIL
+  OFL 1.1, see [licenses/fonts](licenses/fonts).
 - A handful of toolbar/dialog icon drawables redrawn from Google Material
   Icons -- Apache License 2.0, see [licenses/icons](licenses/icons).

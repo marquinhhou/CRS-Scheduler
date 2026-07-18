@@ -22,13 +22,7 @@ import dev.marquinhhou.crsscheduler.model.ClassSession;
 import dev.marquinhhou.crsscheduler.ui.WeekScheduleActivity;
 import dev.marquinhhou.crsscheduler.widget.WidgetRenderer;
 
-/**
- * Fires once per scheduled class reminder. Re-reads the schedule from disk
- * rather than trusting the alarm's extras for anything beyond "which class,
- * which day" -- so a room/instructor edit made after the alarm was set still
- * shows up correctly, and a class since removed/renamed is silently skipped
- * instead of notifying about something that no longer exists.
- */
+/** Fires per scheduled reminder. Re-reads the schedule from disk so edits/deletions since are respected. */
 public class ClassReminderReceiver extends BroadcastReceiver {
 
     @Override

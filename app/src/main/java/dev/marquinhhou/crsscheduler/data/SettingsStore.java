@@ -2,6 +2,8 @@ package dev.marquinhhou.crsscheduler.data;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
+import android.os.Build;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -11,19 +13,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Small settings store: the optional campus name used to scope Maps searches,
- * the first-run Terms gate, and the optional overall date range ("semester") the
- * loaded schedule applies to.
- *
- * Deliberately named "semester", not "term", to avoid reading like the Terms
- * gate above. This range is purely a display-layer gate -- it doesn't touch
- * ScheduleStore's data at all, it just tells the live widgets/in-app schedule
- * view whether "today" falls inside [semesterStart, semesterEnd] (or
- * [semesterStart, ...) if no end date was set, i.e. "still ongoing"), so they
- * can show a "hasn't started yet" / "this semester has ended" state instead of
- * a live schedule that isn't actually in session. Leaving it unset (the
- * default) skips this check entirely, so nothing changes for anyone who
- * doesn't set it.
+ * Campus hint, Terms gate, semester date range, widget toggles, reminders,
+ * theme family, profile fields, Form 5, and export footer toggles.
  */
 public final class SettingsStore {
 
@@ -37,6 +28,17 @@ public final class SettingsStore {
     private static final String KEY_SHOW_TOMORROW = "widget_show_tomorrow";
     private static final String KEY_REMINDER_LEAD_MINUTES = "reminder_lead_minutes";
     private static final String KEY_REMINDER_REQUEST_CODES = "reminder_scheduled_request_codes";
+    private static final String KEY_THEME_FAMILY = "theme_family";
+    private static final String KEY_ONBOARDING_COMPLETE = "onboarding_complete";
+    private static final String KEY_PROFILE_NAME = "profile_name";
+    private static final String KEY_PROFILE_STUDENT_NO = "profile_student_no";
+    private static final String KEY_PROFILE_COURSE = "profile_course";
+    private static final String KEY_PROFILE_YEAR_STANDING = "profile_year_standing";
+    private static final String KEY_FORM5_URI = "form5_uri";
+    private static final String KEY_EXPORT_SHOW_NAME = "export_show_name";
+    private static final String KEY_EXPORT_SHOW_STUDENT_NO = "export_show_student_no";
+    private static final String KEY_EXPORT_SHOW_COURSE = "export_show_course";
+    private static final String KEY_EXPORT_SHOW_YEAR_STANDING = "export_show_year_standing";
 
     private SettingsStore() {}
 
@@ -82,12 +84,7 @@ public final class SettingsStore {
         e.apply();
     }
 
-    public enum SemesterPhase {
-        NOT_SET,    // no start date configured -- schedule always treated as in session
-        UPCOMING,   // before semesterStart
-        ACTIVE,     // on/after semesterStart, and on/before semesterEnd if one is set
-        ENDED       // after semesterEnd
-    }
+    public enum SemesterPhase { NOT_SET, UPCOMING, ACTIVE, ENDED }
 
     /** Where "today" falls relative to the configured semester range. */
     public static SemesterPhase currentSemesterPhase(Context context) {
@@ -100,14 +97,7 @@ public final class SettingsStore {
         return SemesterPhase.ACTIVE;
     }
 
-    /**
-     * Same as currentSemesterPhase(), except an UPCOMING phase is folded into
-     * ACTIVE when the widget-level "preview before start" toggle is on. Used
-     * anywhere the *content* gate lives (widgets, the full schedule screen);
-     * currentSemesterPhase() itself is left alone so things like the "Semester
-     * hasn't started yet" copy and the toggle's own on/off state can still
-     * tell a real UPCOMING apart from an ACTIVE-via-preview one.
-     */
+    /** Same as currentSemesterPhase(), but UPCOMING folds into ACTIVE when preview-before-start is on. */
     public static SemesterPhase effectiveDisplayPhase(Context context) {
         SemesterPhase raw = currentSemesterPhase(context);
         if (raw == SemesterPhase.UPCOMING && isPreviewBeforeStartEnabled(context)) {
@@ -116,7 +106,6 @@ public final class SettingsStore {
         return raw;
     }
 
-    /** Widget-tappable toggle: show the live schedule even before semesterStart. */
     public static boolean isPreviewBeforeStartEnabled(Context context) {
         return prefs(context).getBoolean(KEY_PREVIEW_BEFORE_START, false);
     }
@@ -125,7 +114,6 @@ public final class SettingsStore {
         prefs(context).edit().putBoolean(KEY_PREVIEW_BEFORE_START, enabled).apply();
     }
 
-    /** Widget-tappable toggle: the Today widget's class list shows tomorrow instead of today. */
     public static boolean isShowTomorrowEnabled(Context context) {
         return prefs(context).getBoolean(KEY_SHOW_TOMORROW, false);
     }
@@ -134,7 +122,6 @@ public final class SettingsStore {
         prefs(context).edit().putBoolean(KEY_SHOW_TOMORROW, enabled).apply();
     }
 
-    /** Marks that we've already auto-archived the schedule for this semester end date, so it only happens once. */
     public static LocalDate getLastAutoArchivedEnd(Context context) {
         SharedPreferences p = prefs(context);
         return p.contains(KEY_LAST_AUTO_ARCHIVED_END) ? LocalDate.ofEpochDay(p.getLong(KEY_LAST_AUTO_ARCHIVED_END, 0)) : null;
@@ -155,11 +142,7 @@ public final class SettingsStore {
         prefs(context).edit().putInt(KEY_REMINDER_LEAD_MINUTES, minutes).apply();
     }
 
-    /**
-     * The AlarmManager request codes ClassReminderScheduler currently has
-     * pending, so it can cancel exactly those before rescheduling rather than
-     * guessing. Not meant to be read/written outside that class.
-     */
+    /** AlarmManager request codes currently pending, so ClassReminderScheduler can cancel exactly those. */
     public static List<Integer> getScheduledReminderRequestCodes(Context context) {
         String json = prefs(context).getString(KEY_REMINDER_REQUEST_CODES, null);
         List<Integer> out = new ArrayList<>();
@@ -177,6 +160,123 @@ public final class SettingsStore {
         JSONArray arr = new JSONArray();
         for (int code : codes) arr.put(code);
         prefs(context).edit().putString(KEY_REMINDER_REQUEST_CODES, arr.toString()).apply();
+    }
+
+    /**
+     * GE: UP-maroon accent, follows system light/dark (default).
+     * NE: Nothing-OS-inspired, fixed dark red-on-black.
+     * ADAPTIVE: Android 12+ Material You wallpaper colors, follows system light/dark.
+     */
+    public enum ThemeFamily { GE, NE, ADAPTIVE }
+
+    /** Falls back to GE if ADAPTIVE was saved on a device that no longer supports it (API &lt; 31). */
+    public static ThemeFamily getThemeFamily(Context context) {
+        String raw = prefs(context).getString(KEY_THEME_FAMILY, ThemeFamily.GE.name());
+        ThemeFamily family;
+        try {
+            family = ThemeFamily.valueOf(raw);
+        } catch (IllegalArgumentException e) {
+            family = ThemeFamily.GE;
+        }
+        if (family == ThemeFamily.ADAPTIVE && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return ThemeFamily.GE;
+        }
+        return family;
+    }
+
+    public static void setThemeFamily(Context context, ThemeFamily family) {
+        prefs(context).edit().putString(KEY_THEME_FAMILY, family.name()).apply();
+    }
+
+    /** Whether the first-run setup wizard has been completed -- once true, Configure always opens in its normal (non-wizard) form. */
+    public static boolean hasCompletedOnboarding(Context context) {
+        return prefs(context).getBoolean(KEY_ONBOARDING_COMPLETE, false);
+    }
+
+    public static void setOnboardingComplete(Context context, boolean complete) {
+        prefs(context).edit().putBoolean(KEY_ONBOARDING_COMPLETE, complete).apply();
+    }
+
+    // Profile -- optional, only ever shown on the exported schedule image, and only for
+    // whichever fields their matching export-show toggle turns on (all off by default).
+
+    public static String getProfileName(Context context) {
+        return prefs(context).getString(KEY_PROFILE_NAME, "");
+    }
+
+    public static void setProfileName(Context context, String name) {
+        prefs(context).edit().putString(KEY_PROFILE_NAME, name).apply();
+    }
+
+    public static String getProfileStudentNo(Context context) {
+        return prefs(context).getString(KEY_PROFILE_STUDENT_NO, "");
+    }
+
+    public static void setProfileStudentNo(Context context, String studentNo) {
+        prefs(context).edit().putString(KEY_PROFILE_STUDENT_NO, studentNo).apply();
+    }
+
+    public static String getProfileCourse(Context context) {
+        return prefs(context).getString(KEY_PROFILE_COURSE, "");
+    }
+
+    public static void setProfileCourse(Context context, String course) {
+        prefs(context).edit().putString(KEY_PROFILE_COURSE, course).apply();
+    }
+
+    public static String getProfileYearStanding(Context context) {
+        return prefs(context).getString(KEY_PROFILE_YEAR_STANDING, "");
+    }
+
+    public static void setProfileYearStanding(Context context, String yearStanding) {
+        prefs(context).edit().putString(KEY_PROFILE_YEAR_STANDING, yearStanding).apply();
+    }
+
+    public static boolean isExportShowNameEnabled(Context context) {
+        return prefs(context).getBoolean(KEY_EXPORT_SHOW_NAME, false);
+    }
+
+    public static void setExportShowNameEnabled(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_EXPORT_SHOW_NAME, enabled).apply();
+    }
+
+    public static boolean isExportShowStudentNoEnabled(Context context) {
+        return prefs(context).getBoolean(KEY_EXPORT_SHOW_STUDENT_NO, false);
+    }
+
+    public static void setExportShowStudentNoEnabled(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_EXPORT_SHOW_STUDENT_NO, enabled).apply();
+    }
+
+    public static boolean isExportShowCourseEnabled(Context context) {
+        return prefs(context).getBoolean(KEY_EXPORT_SHOW_COURSE, false);
+    }
+
+    public static void setExportShowCourseEnabled(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_EXPORT_SHOW_COURSE, enabled).apply();
+    }
+
+    public static boolean isExportShowYearStandingEnabled(Context context) {
+        return prefs(context).getBoolean(KEY_EXPORT_SHOW_YEAR_STANDING, false);
+    }
+
+    public static void setExportShowYearStandingEnabled(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_EXPORT_SHOW_YEAR_STANDING, enabled).apply();
+    }
+
+    // Form 5 -- a picked PDF's content:// Uri, held via a persistable permission grant so it
+    // survives app restarts/reboots (taken where the file is actually picked, ConfigureActivity).
+
+    public static Uri getForm5Uri(Context context) {
+        String raw = prefs(context).getString(KEY_FORM5_URI, null);
+        return raw == null ? null : Uri.parse(raw);
+    }
+
+    /** Pass null to clear it. Doesn't itself release any persistable permission -- see Uri javadoc above. */
+    public static void setForm5Uri(Context context, Uri uri) {
+        SharedPreferences.Editor e = prefs(context).edit();
+        if (uri == null) e.remove(KEY_FORM5_URI); else e.putString(KEY_FORM5_URI, uri.toString());
+        e.apply();
     }
 
     private static SharedPreferences prefs(Context context) {

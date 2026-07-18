@@ -9,22 +9,15 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 
-import dev.marquinhhou.crsscheduler.R;
 import dev.marquinhhou.crsscheduler.data.ScheduleStore;
 import dev.marquinhhou.crsscheduler.data.SettingsStore;
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 
 /**
- * Backs the scrollable "TODAY'S CLASSES" list inside the Today widget's full
- * layout. A plain ScrollView isn't among the view types RemoteViews supports --
- * real in-widget scrolling only exists through a collection view (ListView,
- * GridView, StackView, AdapterViewFlipper) backed by a RemoteViewsFactory like
- * this one. Because rows come from an adapter rather than being addView()'d
- * directly, per-row taps can't carry their own individual PendingIntent (the
- * platform rejects setOnClickPendingIntent() inside a factory-provided row) --
- * instead each row calls setOnClickFillInIntent(), and WidgetRenderer sets a
- * single setPendingIntentTemplate() on the ListView itself that the system
- * merges each row's fill-in data into at tap time.
+ * Backs the scrollable "TODAY'S CLASSES" list -- a RemoteViewsFactory-backed
+ * ListView, since plain ScrollViews aren't RemoteViews-supported. Rows use
+ * setOnClickFillInIntent() against WidgetRenderer's setPendingIntentTemplate()
+ * on the ListView, since factory-provided rows can't carry their own PendingIntent.
  */
 public class TodayClassesRemoteViewsService extends RemoteViewsService {
 
@@ -43,10 +36,7 @@ public class TodayClassesRemoteViewsService extends RemoteViewsService {
         }
 
         @Override
-        public void onCreate() {
-            // Nothing to set up up-front; onDataSetChanged() below does the real
-            // loading and is guaranteed to run at least once before getViewAt().
-        }
+        public void onCreate() {}
 
         @Override
         public void onDataSetChanged() {
@@ -94,7 +84,7 @@ public class TodayClassesRemoteViewsService extends RemoteViewsService {
         @Override
         public RemoteViews getViewAt(int position) {
             if (position < 0 || position >= todays.size()) {
-                return new RemoteViews(context.getPackageName(), R.layout.row_more_indicator);
+                return new RemoteViews(context.getPackageName(), WidgetRenderer.rowMoreIndicatorLayout(context));
             }
             ClassSession c = todays.get(position);
             boolean isLast = position == todays.size() - 1;

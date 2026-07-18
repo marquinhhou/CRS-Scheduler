@@ -18,12 +18,8 @@ import java.util.regex.Pattern;
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 
 /**
- * Parses a saved/copied UP CRS "Student Registration" schedule page and extracts
- * the "Enlisted Classes" table into a list of {@link ClassSession}.
- *
- * This is a direct Java port of the parseSchedule()/parseDays()/parseTimeRange()
- * logic from the original nothing_schedule.html widget, so the two stay in sync
- * on what counts as a valid row.
+ * Extracts the "Enlisted Classes" table from a saved UP CRS schedule page into a
+ * list of {@link ClassSession}. Java port of the original web widget's parser.
  */
 public final class ScheduleParser {
 
@@ -66,11 +62,7 @@ public final class ScheduleParser {
 
     private ScheduleParser() {}
 
-    /**
-     * Best-effort sniff of a campus/university name from the page (e.g. "UP Diliman"),
-     * used only to scope the optional online room-lookup search query. Returns null if
-     * nothing recognizable is found -- the user can type a campus name manually instead.
-     */
+    /** Sniffs a campus name (e.g. "UP Diliman") from the page, for scoping the Maps search. */
     public static String detectCampusHint(String html) {
         Matcher m = CAMPUS_HINT.matcher(html);
         if (m.find()) return m.group(0).replaceAll("\\s+", " ").trim();

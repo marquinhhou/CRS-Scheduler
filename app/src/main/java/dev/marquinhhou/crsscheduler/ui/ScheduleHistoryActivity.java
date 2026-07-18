@@ -20,22 +20,21 @@ import dev.marquinhhou.crsscheduler.model.ClassSession;
 import dev.marquinhhou.crsscheduler.model.ScheduleSnapshot;
 import dev.marquinhhou.crsscheduler.widget.WidgetRefreshScheduler;
 
-/**
- * Browse, reactivate, or delete previously-active schedules. Entries are
- * created automatically by ConfigureActivity whenever the active schedule is
- * about to be replaced or cleared (see ScheduleHistoryStore.archive() call
- * sites) -- there's no separate "save" action here, just management of what's
- * already been archived.
- */
+/** Browse, reactivate, or delete previously-active schedules (auto-archived by ConfigureActivity). */
 public class ScheduleHistoryActivity extends AppCompatActivity {
 
     private LinearLayout container;
     private TextView emptyText;
+    private int layoutRowHistoryEntry;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_schedule_history);
+        Theming.applyActivityTheme(this);
+        setContentView(Theming.pick(this,
+                R.layout.activity_schedule_history_ge, R.layout.activity_schedule_history_ne, R.layout.activity_schedule_history_adaptive));
+        layoutRowHistoryEntry = Theming.pick(this,
+                R.layout.row_history_entry_ge, R.layout.row_history_entry_ne, R.layout.row_history_entry_adaptive);
 
         container = findViewById(R.id.history_container);
         emptyText = findViewById(R.id.history_empty_text);
@@ -56,7 +55,7 @@ public class ScheduleHistoryActivity extends AppCompatActivity {
 
         LayoutInflater inflater = LayoutInflater.from(this);
         for (ScheduleSnapshot snap : all) {
-            View row = inflater.inflate(R.layout.row_history_entry, container, false);
+            View row = inflater.inflate(layoutRowHistoryEntry, container, false);
             ((TextView) row.findViewById(R.id.history_row_label)).setText(snap.displayName());
             row.findViewById(R.id.history_row_reactivate).setOnClickListener(v -> confirmReactivate(snap));
             row.findViewById(R.id.history_row_rename).setOnClickListener(v -> promptRename(snap));

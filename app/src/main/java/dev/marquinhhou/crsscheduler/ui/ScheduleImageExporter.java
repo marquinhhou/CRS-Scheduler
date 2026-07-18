@@ -5,7 +5,6 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -21,45 +20,26 @@ import java.util.List;
 import java.util.Locale;
 
 import dev.marquinhhou.crsscheduler.R;
+import dev.marquinhhou.crsscheduler.data.SettingsStore;
 import dev.marquinhhou.crsscheduler.model.ClassSession;
 import dev.marquinhhou.crsscheduler.widget.WidgetRenderer;
 
 /**
- * Draws the week's schedule as a single image matching the widget's own look --
- * dark background, monospace type, dim dots marking free slots -- and saves it
- * to the device's Pictures gallery via MediaStore.
- *
- * Deliberately "plain": unlike the live widgets, this is a static snapshot
- * someone might save or share later, so it doesn't highlight "today" in red --
- * that distinction only makes sense at the moment it's generated and would just
- * be wrong/confusing by the time anyone actually looks at the saved image.
- * Class names ARE shown per cell (abbreviated the same way the widget does),
- * just without any day-specific color coding -- every occupied cell reads the
- * same regardless of which day it falls on.
- *
- * Reuses WidgetRenderer's grid math (weekBreakpoints/activeWeekDays/
- * occupiedRowIndices/findClassInSlot/abbreviateName/compactRangeLabel) so the
- * exported table always matches what the widget itself considers "the
- * schedule" -- including which day columns and time-slot rows it bothers to
- * show -- only the drawing/rendering step here differs.
+ * Draws the week's schedule as an image matching the app's current theme and saves it to
+ * the gallery. Doesn't highlight "today" (a static snapshot has no "now"). Reuses
+ * WidgetRenderer's grid math so the export always matches what the widget shows.
  */
 public final class ScheduleImageExporter {
 
     private static final int PADDING = 28;
     private static final int HEADER_BAR_HEIGHT = 60;
     private static final int HEADLINE_HEIGHT = 50;
+    private static final int PROFILE_LINE_HEIGHT = 30;
     private static final int GRID_ROW_HEIGHT = 50;
     private static final int TIME_COL_WIDTH = 130;
     private static final int DAY_COL_WIDTH = 130;
     private static final int NOTE_HEIGHT = 40;
-    private static final int FOOTER_HEIGHT = 46;
-
-    private static final int COLOR_BG = Color.parseColor("#000000");
-    private static final int COLOR_SURFACE = Color.parseColor("#0D0D0D");
-    private static final int COLOR_GRID_LINE = Color.parseColor("#1AFFFFFF");
-    private static final int COLOR_INK = Color.parseColor("#F3F2ED");
-    private static final int COLOR_INK_DIM = Color.parseColor("#8B8B86");
-    private static final int COLOR_RED = Color.parseColor("#FF2E17");
+    private static final int FOOTER_HEIGHT = 36;
 
     private ScheduleImageExporter() {}
 
@@ -77,32 +57,45 @@ public final class ScheduleImageExporter {
         String noClassDays = WidgetRenderer.noClassDaysLabel(activeDays);
         int noteHeight = noClassDays.isEmpty() ? 0 : NOTE_HEIGHT;
 
-        Typeface mono = font(context, R.font.jetbrains_mono);
-        Typeface monoBold = font(context, R.font.jetbrains_mono_bold);
+        String profileLine = buildProfileLine(context);
+        int profileLineHeight = profileLine.isEmpty() ? 0 : PROFILE_LINE_HEIGHT;
+
+        int colorBg = Theming.color(context, R.color.ge_bg, R.color.ne_bg, R.color.adaptive_bg);
+        int colorSurface = Theming.color(context, R.color.ge_surface, R.color.ne_surface, R.color.adaptive_surface);
+        int colorGridLine = Theming.color(context, R.color.ge_line, R.color.ne_line, R.color.adaptive_line);
+        int colorInk = Theming.color(context, R.color.ge_ink, R.color.ne_ink, R.color.adaptive_ink);
+        int colorInkDim = Theming.color(context, R.color.ge_ink_dim, R.color.ne_ink_dim, R.color.adaptive_ink_dim);
+        int colorAccent = Theming.color(context, R.color.ge_accent, R.color.ne_accent, R.color.adaptive_accent);
+
+        boolean mono = Theming.usesMonoFont(context);
+        Typeface regular = mono ? font(context, R.font.jetbrains_mono) : Typeface.DEFAULT;
+        Typeface bold = mono ? font(context, R.font.jetbrains_mono_bold) : Typeface.DEFAULT_BOLD;
 
         int width = PADDING * 2 + TIME_COL_WIDTH + DAY_COL_WIDTH * dayCols;
-        int height = PADDING * 2 + HEADER_BAR_HEIGHT + HEADLINE_HEIGHT + GRID_ROW_HEIGHT * (rows + 1)
-                + noteHeight + FOOTER_HEIGHT;
+        int height = PADDING * 2 + HEADER_BAR_HEIGHT + HEADLINE_HEIGHT + profileLineHeight
+                + GRID_ROW_HEIGHT * (rows + 1) + noteHeight + FOOTER_HEIGHT;
 
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
-        canvas.drawColor(COLOR_BG);
+        canvas.drawColor(colorBg);
 
-        Paint brandPaint = textPaint(20, COLOR_INK_DIM, Paint.Align.LEFT, mono);
-        Paint headlinePaint = textPaint(26, COLOR_INK, Paint.Align.LEFT, monoBold);
-        Paint dayLabelPaint = textPaint(20, COLOR_INK_DIM, Paint.Align.CENTER, monoBold);
-        Paint timeTextPaint = textPaint(16, COLOR_INK_DIM, Paint.Align.CENTER, mono);
-        Paint cellTextPaint = textPaint(17, COLOR_INK, Paint.Align.CENTER, monoBold);
-        Paint notePaint = textPaint(16, COLOR_INK_DIM, Paint.Align.LEFT, mono);
-        Paint footerPaint = textPaint(16, COLOR_INK_DIM, Paint.Align.CENTER, mono);
+        Paint brandPaint = textPaint(20, colorInkDim, Paint.Align.LEFT, regular);
+        Paint headlinePaint = textPaint(26, colorInk, Paint.Align.LEFT, bold);
+        Paint profileLinePaint = textPaint(15, colorInkDim, Paint.Align.LEFT, regular);
+        Paint dayLabelPaint = textPaint(20, colorInkDim, Paint.Align.CENTER, bold);
+        Paint timeTextPaint = textPaint(16, colorInkDim, Paint.Align.CENTER, regular);
+        Paint cellTextPaint = textPaint(17, colorInk, Paint.Align.CENTER, bold);
+        Paint notePaint = textPaint(16, colorInkDim, Paint.Align.LEFT, regular);
+        Paint footerPaint = textPaint(12, colorInkDim, Paint.Align.CENTER, regular);
+        footerPaint.setAlpha(150);
         Paint gridPaint = new Paint();
-        gridPaint.setColor(COLOR_GRID_LINE);
+        gridPaint.setColor(colorGridLine);
         gridPaint.setStyle(Paint.Style.STROKE);
         gridPaint.setStrokeWidth(2f);
         Paint tablePaint = new Paint();
-        tablePaint.setColor(COLOR_SURFACE);
+        tablePaint.setColor(colorSurface);
         Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        dotPaint.setColor(COLOR_INK_DIM);
+        dotPaint.setColor(colorInkDim);
         dotPaint.setAlpha(90);
 
         double totalUnits = 0;
@@ -110,29 +103,27 @@ public final class ScheduleImageExporter {
 
         int y = PADDING;
 
-        // brand row, matching the widget header's style (the red dot is just
-        // branding here, not a "today" indicator)
         Paint brandDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        brandDotPaint.setColor(COLOR_RED);
+        brandDotPaint.setColor(colorAccent);
         canvas.drawCircle(PADDING + 6, y + HEADER_BAR_HEIGHT / 2f - 6, 6, brandDotPaint);
         canvas.drawText("WEEKLY", PADDING + 20, y + HEADER_BAR_HEIGHT / 2f, brandPaint);
         y += HEADER_BAR_HEIGHT;
 
-        // headline: "N classes · X.X units"
         String headline = schedule.size() + (schedule.size() == 1 ? " class" : " classes")
                 + " \u00B7 " + String.format(Locale.US, "%.1f", totalUnits) + " units";
         canvas.drawText(headline, PADDING, y + HEADLINE_HEIGHT / 2f + 9, headlinePaint);
         y += HEADLINE_HEIGHT;
+
+        if (!profileLine.isEmpty()) {
+            canvas.drawText(profileLine, PADDING, y + PROFILE_LINE_HEIGHT / 2f + 6, profileLinePaint);
+            y += PROFILE_LINE_HEIGHT;
+        }
 
         int tableTop = y;
         int tableBottom = y + GRID_ROW_HEIGHT * (rows + 1);
         canvas.drawRoundRect(PADDING, tableTop, PADDING + TIME_COL_WIDTH + DAY_COL_WIDTH * dayCols, tableBottom,
                 24f, 24f, tablePaint);
 
-        // header row: blank corner + one day letter per day that actually has a
-        // class this week (empty days, e.g. weekends for most students, are
-        // dropped rather than shown as an all-dot column -- see
-        // WidgetRenderer.activeWeekDays())
         for (int i = 0; i < dayCols; i++) {
             int dayIdx = activeDays.get(i);
             float cx = PADDING + TIME_COL_WIDTH + i * DAY_COL_WIDTH + DAY_COL_WIDTH / 2f;
@@ -141,8 +132,6 @@ public final class ScheduleImageExporter {
         }
         y += GRID_ROW_HEIGHT;
 
-        // data rows: time range + the class abbreviation (or a dim dot if free) --
-        // only for slots with a class somewhere (see WidgetRenderer.occupiedRowIndices())
         for (int i = 0; i < rows; i++) {
             int r = occupiedRows.get(i);
             int slotStart = breakpoints.get(r);
@@ -168,18 +157,32 @@ public final class ScheduleImageExporter {
             }
         }
 
-        // "No classes on: Sat, Sun" -- explains why those day columns aren't in
-        // the grid above, rather than the grid just silently not accounting for
-        // all 7 days. Skipped entirely when every day has a class.
         if (!noClassDays.isEmpty()) {
             canvas.drawText(noClassDays, PADDING, tableBottom + NOTE_HEIGHT / 2f + 6, notePaint);
         }
 
-        // footer: fine print
-        int footerY = tableBottom + noteHeight + FOOTER_HEIGHT / 2 + 6;
+        int footerY = tableBottom + noteHeight + FOOTER_HEIGHT / 2 + 5;
         canvas.drawText("CRS Scheduler by marquinhhou on GitHub", width / 2f, footerY, footerPaint);
 
         return bitmap;
+    }
+
+    /** Joins whichever profile fields the person has switched on for the export, "" if none/empty. */
+    private static String buildProfileLine(Context context) {
+        StringBuilder sb = new StringBuilder();
+        if (SettingsStore.isExportShowNameEnabled(context)) appendIfPresent(sb, SettingsStore.getProfileName(context));
+        if (SettingsStore.isExportShowCourseEnabled(context)) appendIfPresent(sb, SettingsStore.getProfileCourse(context));
+        if (SettingsStore.isExportShowYearStandingEnabled(context)) appendIfPresent(sb, SettingsStore.getProfileYearStanding(context));
+        if (SettingsStore.isExportShowStudentNoEnabled(context)) appendIfPresent(sb, SettingsStore.getProfileStudentNo(context));
+        return sb.toString();
+    }
+
+    private static void appendIfPresent(StringBuilder sb, String value) {
+        if (value == null) return;
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) return;
+        if (sb.length() > 0) sb.append("  \u00B7  ");
+        sb.append(trimmed);
     }
 
     /** Draws centered text, shrinking the font just enough to fit maxWidth if it'd otherwise overflow the cell. */
@@ -206,11 +209,7 @@ public final class ScheduleImageExporter {
         return p;
     }
 
-    /**
-     * Saves the bitmap into the device's Pictures/CRSScheduler gallery folder.
-     * Uses scoped storage (MediaStore, no permission needed) on Android 10+;
-     * callers on older versions must hold WRITE_EXTERNAL_STORAGE first.
-     */
+    /** Saves to Pictures/CRSScheduler via MediaStore (no permission needed on Android 10+). */
     public static Uri saveToGallery(Context context, Bitmap bitmap) throws IOException {
         String displayName = "CRS_Schedule_" + System.currentTimeMillis() + ".png";
 
