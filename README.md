@@ -3,12 +3,18 @@
 An Android home screen widget pair for your UP CRS class schedule.
 
 **Author:** [marquinhhou](https://github.com/marquinhhou)
+
 **Credits:** Marc Dizon, BS Statistics
 
 This is an independent, unofficial student project. It is **not affiliated
 with, endorsed by, or connected to** the University of the Philippines
 Diliman, the UP School of Statistics, the UP Computerized Registration
 System (CRS), or Nothing Technology Limited.
+
+**NOTICE:** This README (except for this notice) and the comments inside 
+of the program are written and organized with the help of AI, with the main 
+purpose of helping the repo audiences understand the project easier and explain
+it better than I could personally do myself. Thank you!
 
 ---
 
